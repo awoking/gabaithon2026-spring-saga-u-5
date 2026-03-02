@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>16×16 ドット絵エディタ</title>
+  <style>
+    /* ===== 全体レイアウト ===== */
+    body {
+      background: #1a1a1a;
+      color: #eee;
+      font-family: monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px;
+    }
+
+    h1 {
+      margin-bottom: 20px;
+      font-size: 20px;
+      letter-spacing: 2px;
+    }
+
+    /* ===== グリッド全体のコンテナ ===== */
+    /* @16×16のセルを並べるためのグリッドレイアウト@ */
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(16, 30px); /* @横に16列、各セル30px幅@ */
+      grid-template-rows: repeat(16, 30px);    /* @縦に16行、各セル30px高さ@ */
+      border: 2px solid #555;
+      cursor: crosshair;
+    }
+
+    /* ===== 各セル（ドット1マス分）のスタイル ===== */
+    /* @0=黒(#000000) / 1=白(#ffffff) を視覚的に表現@ */
+    .cell {
+      width: 30px;
+      height: 30px;
+      background-color: #000000; /* @初期値は0（黒）@ */
+      border: 1px solid #333;
+      box-sizing: border-box;
+    }
+
+    /* @白（値=1）のセルに付与するクラス@ */
+    .cell.white {
+      background-color: #ffffff;
+    }
+
+    /* ===== ボタン類 ===== */
+    .controls {
+      margin-top: 20px;
+      display: flex;
+      gap: 12px;
+    }
+
+    button {
+      padding: 8px 20px;
+      background: #444;
+      color: #eee;
+      border: 1px solid #666;
+      cursor: pointer;
+      font-family: monospace;
+      font-size: 14px;
+    }
+
+    button:hover {
+      background: #666;
+    }
+
+    /* ===== JSON出力エリア ===== */
+    #output {
+      margin-top: 20px;
+      background: #111;
+      border: 1px solid #444;
+      padding: 16px;
+      width: 500px;
+      white-space: pre;
+      font-size: 13px;
+      line-height: 1.6;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🖤 16×16 ドット絵エディタ</h1>
+
+  <!-- @グリッドはJavaScriptで動的に生成する@ -->
+  <div id="grid"></div>
+
+  <div class="controls">
+    <!-- JSON書き出しボタン -->
+    <button onclick="exportJSON()">📋 JSONで書き出す</button>
+    <!-- 全リセットボタン -->
+    <button onclick="resetGrid()">🗑 リセット</button>
+  </div>
+
+  <!-- JSON出力結果を表示するエリア -->
+  <div id="output">ここにJSONが出力されます</div>
+
+  <script>
+    // ===== 定数定義 =====
+    const SIZE = 16; // @グリッドのサイズ：16×16@ 
+
+    // @グリッドの状態を保持する2次元配列（0=黒 / 1=白）@
+    // @初期状態はすべて0（黒）で埋める@
+    let gridData = Array.from({ length: SIZE }, () => Array(SIZE).fill(0));
+
+    // ===== グリッドの生成 =====
+    // @HTMLのグリッドコンテナにセルを動的に追加する@
+    function buildGrid() {
+      const container = document.getElementById('grid');
+      container.innerHTML = ''; // @既存のセルをクリアしてから再生成@
+
+      for (let row = 0; row < SIZE; row++) {
+        for (let col = 0; col < SIZE; col++) {
+          const cell = document.createElement('div');
+          cell.classList.add('cell');
+
+          // @クリックでセルの値を0↔1に切り替える@
+          cell.addEventListener('click', () => toggleCell(row, col, cell));
+
+          // @マウスボタンを押しながらドラッグで連続描画できるようにする@
+          cell.addEventListener('mouseenter', (e) => {
+            if (e.buttons === 1) toggleCell(row, col, cell); // @左ボタン押しながら移動中なら描画@
+          });
+
+          container.appendChild(cell);
+        }
+      }
+    }
+
+    // ===== セルの切り替えロジック =====
+    // @クリックされたセルの値を反転させ、見た目も更新する@
+    function toggleCell(row, col, cellEl) {
+      // @現在の値を反転（0→1、1→0）@
+      gridData[row][col] = gridData[row][col] === 0 ? 1 : 0;
+
+      // @値が1（白）なら .white クラスを付与、0（黒）なら外す@
+      if (gridData[row][col] === 1) {
+        cellEl.classList.add('white');
+      } else {
+        cellEl.classList.remove('white');
+      }
+    }
+
+    // ===== JSON書き出し =====
+    // @gridDataを行ごとに0と1の文字列に変換してJSON形式で出力する@
+    function exportJSON() {
+      // @各行を "0010110..." のような文字列に変換@
+      const rows = gridData.map(row => row.join(''));
+
+      // @JSONオブジェクトとして整形@
+      const json = JSON.stringify({ grid: rows }, null, 2);
+
+      document.getElementById('output').textContent = json;
+    }
+
+    // ===== リセット =====
+    // @グリッドの全セルを0（黒）に戻す@
+    function resetGrid() {
+      gridData = Array.from({ length: SIZE }, () => Array(SIZE).fill(0));
+      buildGrid(); // @グリッドを再描画@
+      document.getElementById('output').textContent = 'ここにJSONが出力されます';
+    }
+
+    // ===== 初期化 =====
+    // @ページ読み込み時にグリッドを生成する@
+    buildGrid();
+  </script>
+
+</body>
+</html>
+
+// 出力例はasset-example.png にて確認してください。
