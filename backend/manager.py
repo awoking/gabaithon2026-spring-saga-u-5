@@ -78,80 +78,105 @@ class SimulationManager:
 
     async def run_loop(self, broadcast_fn):
         batch_size = 100
-        while True:
-            if self.is_running:
-                dt = self.choose_adaptive_dt()
-                # JITカーネル実行（RK4）
-                res_N, res_S, res_T, res_pH, extinct = compute_batch_kernel(
-                    self.engine.N, self.engine.traits, self.engine.m_costs, self.engine.active_mask,
-                    self.S, self.T, self.pH, self.env_params, 
-                    self.engine.plasmid_pool, self.engine.pool_conc, dt, batch_size
-                )
-                
-                self.engine.N, self.S, self.T, self.pH = res_N, res_S, res_T, res_pH
-                self.engine.total_steps += batch_size
-
-                # 旧来の離散補給（必要な場合のみ）
-                self.apply_nutrient_feed()
-                
-                # 絶滅処理
-                reaped = self.engine.reap()
-                
-                # 分裂処理
-                div_count = self.engine.division_trigger(threshold=50.0)
-                self.division_count += div_count
-                
-                # プール更新
-                self.engine.refresh_env_pool()
-                
-                # 水平伝播（HGT）処理
-                hgt_count = self.run_hgt_events(dt=dt, batch_size=batch_size)
-                
-                # ========== LAYER 2b: 離散的な新系統誕生（突然変異ガチャ）==========
-                # 1万ステップごとに、確率的に「新しい形質」を持つ新株を生成
-                # これが「種としての分岐」であり、進化シミュレーションの本質
-                if np.random.rand() < 0.3:
-                    active = np.where(self.engine.active_mask)[0]
-                    if len(active) > 0:
-                        parent_idx = np.random.choice(active)
-                        self.engine.spawn(parent_idx=parent_idx)  # spawn() は自動的に突然変異を加える
-
-                logger.info(f"Step: {self.engine.total_steps:,} | Strains: {np.sum(self.engine.active_mask)} | "
-                           f"S: {self.S:.3f} | dt: {dt:.4f} | D: {self.env_params[8]:.3f} | Div: {div_count} | HGT: {hgt_count}")
-                await broadcast_fn(self.get_snapshot())
-
-                if extinct:
-                    self.is_running = False
-                    logger.warning("All extinct.")
-            
+        if not self.is_running:
             await asyncio.sleep(0.01)
+            return
+
+        dt = self.choose_adaptive_dt()
+        # JITカーネル実行（RK4）
+        res_N, res_S, res_T, res_pH, extinct = compute_batch_kernel(
+            self.engine.N, self.engine.traits, self.engine.m_costs, self.engine.active_mask,
+            self.S, self.T, self.pH, self.env_params,
+            self.engine.plasmid_pool, self.engine.pool_conc, dt, batch_size
+        )
+
+        self.engine.N, self.S, self.T, self.pH = res_N, res_S, res_T, res_pH
+        self.engine.total_steps += batch_size
+
+        # 旧来の離散補給（必要な場合のみ）
+        self.apply_nutrient_feed()
+
+        # 絶滅処理
+        self.engine.reap()
+
+        # 分裂処理
+        div_count = self.engine.division_trigger(threshold=50.0)
+        self.division_count += div_count
+
+        # プール更新
+        self.engine.refresh_env_pool()
+
+        # 水平伝播（HGT）処理
+        hgt_count = self.run_hgt_events(dt=dt, batch_size=batch_size)
+
+        # ========== LAYER 2b: 離散的な新系統誕生（突然変異ガチャ）==========
+        # 1万ステップごとに、確率的に「新しい形質」を持つ新株を生成
+        # これが「種としての分岐」であり、進化シミュレーションの本質
+        if np.random.rand() < 0.3:
+            active = np.where(self.engine.active_mask)[0]
+            if len(active) > 0:
+                parent_idx = np.random.choice(active)
+                self.engine.spawn(parent_idx=parent_idx)  # spawn() は自動的に突然変異を加える
+
+        logger.info(f"Step: {self.engine.total_steps:,} | Strains: {np.sum(self.engine.active_mask)} | "
+                   f"S: {self.S:.3f} | dt: {dt:.4f} | D: {self.env_params[8]:.3f} | Div: {div_count} | HGT: {hgt_count}")
+        await broadcast_fn(self.get_snapshot())
+
+        if extinct:
+            self.is_running = False
+            logger.warning("All extinct.")
+
+        await asyncio.sleep(0.01)
 
     def get_snapshot(self):
         active_idx = np.where(self.engine.active_mask)[0]
         sorted_idx = active_idx[np.argsort(self.engine.N[active_idx])[::-1]]
+        
+        # ランキング形質を含む詳細情報
+        ranking = []
+        for i in sorted_idx[:20]:  # Top 20
+            ranking.append({
+                "id": int(self.engine.ids[i]),
+                "N": float(self.engine.N[i]),
+                "mu_max": float(self.engine.traits[i, 0]),
+                "Ks": float(self.engine.traits[i, 1]),
+                "p": float(self.engine.traits[i, 2]),
+                "r": float(self.engine.traits[i, 3]),
+                "T_opt": float(self.engine.traits[i, 4]),
+                "pH_opt": float(self.engine.traits[i, 5]),
+                "Rad_res": float(self.engine.traits[i, 6])
+            })
+        
         return {
             "type": "BATCH_UPDATE",
             "step": self.engine.total_steps,
-            "env": {"S": float(self.S), "T": float(self.T), "pH": float(self.pH)},
+            "env": {
+                "S": float(self.S),
+                "T": float(self.T),
+                "pH": float(self.pH),
+                "temp": float(self.env_params[0]),
+                "rad": float(self.env_params[1])
+            },
             "feed": {
                 "enabled": self.auto_feed_enabled,
                 "per_batch": float(self.feed_per_batch),
-                "max_s": float(self.feed_max_s),
-                "continuous": {
-                    "D": float(self.env_params[8]),
-                    "S_in": float(self.env_params[9])
-                }
+                "max_s": float(self.feed_max_s)
             },
-            "ranking": [{"id": int(self.engine.ids[i]), "n": float(self.engine.N[i])} for i in sorted_idx[:5]],
-            "pool": self.engine.pool_conc.tolist(),
+            "ranking": ranking,
+            "pool": {
+                "plasmids": self.engine.plasmid_pool.tolist(),
+                "concentrations": self.engine.pool_conc.tolist()
+            },
             "scatter": {
                 "x": self.engine.traits[active_idx, 0].tolist(),
                 "y": self.engine.traits[active_idx, 1].tolist(),
                 "n": self.engine.N[active_idx].tolist()
             },
             "stats": {
-                "hgt_events": self.hgt_count,
-                "division_events": self.division_count
+                "total_N": float(np.sum(self.engine.N[active_idx])) if len(active_idx) > 0 else 0.0,
+                "active_strains": int(len(active_idx)),
+                "division_count": self.division_count,
+                "hgt_count": self.hgt_count
             }
         }
 
@@ -189,9 +214,13 @@ class SimulationManager:
                         new_traits[6] = self.engine.traits[j, 6]
                     
                     # 新株をspawn
-                    idx_new = self.engine.spawn(parent_idx=i)
-                    if idx_new is not None:
-                        self.engine.traits[self.engine.free_indices[-1]] = new_traits if self.engine.free_indices else None
+                    new_id = self.engine.spawn(parent_idx=i)
+                    if new_id is not None:
+                        idx_candidates = np.where((self.engine.ids == new_id) & self.engine.active_mask)[0]
+                        if len(idx_candidates) > 0:
+                            idx_new = idx_candidates[0]
+                            self.engine.traits[idx_new] = new_traits
+                            self.engine.m_costs[idx_new] = self.engine.calculate_maintenance(new_traits)
                         hgt_events += 1
         
         self.hgt_count += hgt_events
