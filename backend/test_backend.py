@@ -188,6 +188,9 @@ def test_full_simulation():
         engine.N, manager.S, manager.T, manager.pH = res_N, res_S, res_T, res_pH
         engine.total_steps += batch_size
         
+        # 自動供給（デフォルト設定を反映）
+        manager.apply_nutrient_feed()
+        
         # 後処理
         engine.reap()
         div_count = engine.division_trigger(threshold=50.0)

@@ -44,6 +44,25 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg["type"] == "SET_ENV":
                 manager.env_params[0] = msg["temp"]
                 manager.env_params[1] = msg["rad"]
+            if msg["type"] == "SET_FLOW":
+                if "D" in msg:
+                    manager.env_params[8] = max(0.0, float(msg["D"]))
+                if "S_in" in msg:
+                    manager.env_params[9] = max(0.0, float(msg["S_in"]))
+            if msg["type"] == "SET_ADAPTIVE_DT":
+                if "enabled" in msg:
+                    manager.adaptive_dt_enabled = bool(msg["enabled"])
+                if "dt_min" in msg:
+                    manager.dt_min = max(1e-5, float(msg["dt_min"]))
+                if "dt_max" in msg:
+                    manager.dt_max = max(manager.dt_min, float(msg["dt_max"]))
+            if msg["type"] == "SET_FEED":
+                if "enabled" in msg:
+                    manager.auto_feed_enabled = bool(msg["enabled"])
+                if "per_batch" in msg:
+                    manager.feed_per_batch = max(0.0, float(msg["per_batch"]))
+                if "max_s" in msg:
+                    manager.feed_max_s = max(0.0, float(msg["max_s"]))
     except WebSocketDisconnect:
         active_websockets.remove(websocket)
 

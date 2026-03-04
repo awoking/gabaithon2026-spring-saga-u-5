@@ -3,7 +3,9 @@ from numba import njit
 
 @njit
 def get_growth_rate(S, mu_max, Ks, temp, t_opt, ph, ph_opt):
-    base_growth = mu_max * (S / (Ks + S))
+    safe_S = np.maximum(S, 0.0)
+    denom = np.maximum(Ks + safe_S, 1e-8)
+    base_growth = mu_max * (safe_S / denom)
     t_penalty = np.exp(-((temp - t_opt)**2) / 2.0)
     ph_penalty = np.exp(-((ph - ph_opt)**2) / 2.0)
     return base_growth * t_penalty * ph_penalty
@@ -47,9 +49,17 @@ def f_system(N, S, T, pH, traits, m_costs, env_params):
       - d_tox: 毒素ストレスによる死滅
       - d_rad: 放射線ストレスによる死滅
     
-    env_params: [temp, rad, k_tox, k_rad, k_acid, Y, d_T, hgt_prob]
+    env_params:
+      - 旧形式: [temp, rad, k_tox, k_rad, k_acid, Y, d_T, hgt_prob]
+      - 新形式: [temp, rad, k_tox, k_rad, k_acid, Y, d_T, hgt_prob, D, S_in]
     """
-    temp, rad, k_tox, k_rad, k_acid, Y, d_T, _ = env_params
+    temp, rad, k_tox, k_rad, k_acid, Y, d_T, _ = env_params[:8]
+    if len(env_params) >= 10:
+        D = env_params[8]
+        S_in = env_params[9]
+    else:
+        D = 0.0
+        S_in = S
     
     mu_max = traits[:, 0]; Ks = traits[:, 1]; p = traits[:, 2]
     r = traits[:, 3]; t_opt = traits[:, 4]; ph_opt = traits[:, 5]
@@ -60,9 +70,11 @@ def f_system(N, S, T, pH, traits, m_costs, env_params):
     d_tox = k_tox * np.maximum(0.0, T - r)
     d_rad = k_rad * np.maximum(0.0, rad - rad_res)
     
-    # 微分方程式 dN/dt = (g - m_costs - stress) * N
-    dN = (g - m_costs - d_tox - d_rad) * N
-    dS = -np.sum(g * N) / Y
+    # 微分方程式
+    # dN/dt: 増殖 - 維持コスト - ストレス - 希釈流出
+    dN = (g - m_costs - d_tox - d_rad - D) * N
+    # dS/dt: 消費 + 連続供給（chemostat型）
+    dS = -np.sum(g * N) / Y + D * (S_in - S)
     dT = np.sum(p * N) - d_T * T
     dpH = -k_acid * np.sum(g * N)
     
@@ -96,22 +108,22 @@ def compute_batch_kernel(N, traits, m_costs, active_mask, S, T, pH, env_params,
         k1_N, k1_S, k1_T, k1_pH = f_system(N, S, T, pH, traits, m_costs, env_params)
         
         # Stage 2: k2 (at t + dt/2)
-        N_mid2 = N + 0.5 * dt * k1_N
-        S_mid2 = S + 0.5 * dt * k1_S
+        N_mid2 = np.maximum(0.0, N + 0.5 * dt * k1_N)
+        S_mid2 = np.maximum(0.0, S + 0.5 * dt * k1_S)
         T_mid2 = T + 0.5 * dt * k1_T
         pH_mid2 = pH + 0.5 * dt * k1_pH
         k2_N, k2_S, k2_T, k2_pH = f_system(N_mid2, S_mid2, T_mid2, pH_mid2, traits, m_costs, env_params)
         
         # Stage 3: k3 (at t + dt/2)
-        N_mid3 = N + 0.5 * dt * k2_N
-        S_mid3 = S + 0.5 * dt * k2_S
+        N_mid3 = np.maximum(0.0, N + 0.5 * dt * k2_N)
+        S_mid3 = np.maximum(0.0, S + 0.5 * dt * k2_S)
         T_mid3 = T + 0.5 * dt * k2_T
         pH_mid3 = pH + 0.5 * dt * k2_pH
         k3_N, k3_S, k3_T, k3_pH = f_system(N_mid3, S_mid3, T_mid3, pH_mid3, traits, m_costs, env_params)
         
         # Stage 4: k4 (at t + dt)
-        N_final = N + dt * k3_N
-        S_final = S + dt * k3_S
+        N_final = np.maximum(0.0, N + dt * k3_N)
+        S_final = np.maximum(0.0, S + dt * k3_S)
         T_final = T + dt * k3_T
         pH_final = pH + dt * k3_pH
         k4_N, k4_S, k4_T, k4_pH = f_system(N_final, S_final, T_final, pH_final, traits, m_costs, env_params)
@@ -121,6 +133,16 @@ def compute_batch_kernel(N, traits, m_costs, active_mask, S, T, pH, env_params,
         S = S + (dt / 6.0) * (k1_S + 2.0 * k2_S + 2.0 * k3_S + k4_S)
         T = T + (dt / 6.0) * (k1_T + 2.0 * k2_T + 2.0 * k3_T + k4_T)
         pH = pH + (dt / 6.0) * (k1_pH + 2.0 * k2_pH + 2.0 * k3_pH + k4_pH)
+
+        if not np.isfinite(S):
+            S = 0.0
+        if not np.isfinite(T):
+            T = 0.0
+        if not np.isfinite(pH):
+            pH = 7.0
+        for i in range(len(N)):
+            if not np.isfinite(N[i]):
+                N[i] = 0.0
         
         # --- HGT Uptake (水平伝播) ---
         # 毎ステップ全個体判定は重いため、確率的に実行

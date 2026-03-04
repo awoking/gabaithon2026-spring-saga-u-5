@@ -42,24 +42,34 @@ class SimulationEngine:
                 w6 * np.abs(pH_opt - 7.0) + 
                 w7 * Rad_res)
 
-    def spawn(self, parent_idx=None, initial=False):
+    def spawn(self, parent_idx=None, initial=False, initial_N=None):
         if not self.free_indices: return None
         idx = self.free_indices.pop()
         
         if initial:
-            # 初期株: バランス型
-            new_traits = np.array([1.2, 0.5, 0.0, 0.0, 25.0, 7.0, 0.0])
+            # ========== 安定デモ用プリセット（実世界近似とは分離） ==========
+            # [mu_max, Ks, p, r, T_opt, pH_opt, Rad_res]
+            # 安定性実績のある値（auto_feedベース）、改善版
+            new_traits = np.array([0.4, 1.0, 0.0, 0.0, 25.0, 7.0, 0.0])
         else:
             new_traits = self.traits[parent_idx].copy()
             # 突然変異
-            new_traits += np.random.normal(0, 0.03, 7)
+            new_traits += np.random.normal(0, 0.01, 7)  # 突然変異幅を小さくして安定性向上
             new_traits = np.maximum(0.01, new_traits)
             new_traits[4] = np.clip(new_traits[4], 10, 50) # T_opt制限
             new_traits[5] = np.clip(new_traits[5], 3, 11)  # pH_opt制限
         
         self.traits[idx] = new_traits
         self.m_costs[idx] = self.calculate_maintenance(new_traits)
-        self.N[idx] = 1000.0 if initial else 1.0
+        
+        # 初期個体数の決定
+        if initial_N is not None:
+            self.N[idx] = initial_N
+        elif initial:
+            self.N[idx] = 500.0  # 安定デモ用: 実績のある初期個体数
+        else:
+            self.N[idx] = 1.0
+        
         self.ids[idx] = self.next_id
         self.active_mask[idx] = True
         self.next_id += 1
@@ -109,9 +119,10 @@ class SimulationEngine:
         division_count = 0
         for idx in active_idx:
             # Parent: N -> N/2
-            self.N[idx] /= 2.0
-            # Spawn daughter cell (親と同じ形質)
-            daughter_id = self.spawn(parent_idx=idx)
+            parent_N = self.N[idx]
+            self.N[idx] = parent_N / 2.0
+            # Spawn daughter cell (親と同じ形質、同じ個体数で分裂)
+            daughter_id = self.spawn(parent_idx=idx, initial_N=parent_N / 2.0)
             if daughter_id is not None:
                 division_count += 1
         return division_count
