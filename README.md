@@ -13,11 +13,16 @@ gabaithon2026-spring-saga-u-5/
 │   ├── main.py          # WebSocketサーバー
 │   ├── test_backend.py  # 回帰テストスイート
 │   └── verify_defaults.py # デフォルト値検証
-├── src/                 # Next.jsフロントエンド
-│   ├── app/            # ページとレイアウト
-│   └── components/     # UIコンポーネント
+├── frontend/            # Next.jsフロントエンド
+│   ├── src/
+│   │   ├── app/        # ページとレイアウト
+│   │   └── components/ # UIコンポーネント
+│   ├── public/         # 静的ファイル
+│   ├── package.json
+│   └── ...設定ファイル
 └── docs/               # ドキュメント
-    └── 変数チートシート.md  # 変数リファレンス
+    ├── 変数チートシート.md  # 変数リファレンス
+    └── シミュレーション仕様.md # 詳細技術仕様
 ```
 
 ## セットアップ
@@ -31,6 +36,7 @@ gabaithon2026-spring-saga-u-5/
 
 #### 1. フロントエンド
 ```bash
+cd frontend
 npm install
 # または
 pnpm install
@@ -66,6 +72,7 @@ python main.py
 
 #### ターミナル2: フロントエンド起動
 ```bash
+cd frontend
 npm run dev
 # または
 pnpm dev
@@ -121,9 +128,9 @@ python verify_defaults.py
 - **`backend/manager.py`**: シミュレーション全体の制御、環境パラメータ管理
 - **`backend/main.py`**: FastAPIベースのWebSocketサーバー
 
-### フロントエンド
-- **`src/app/page.tsx`**: メインページ（シミュレーション画面）
-- **`src/app/login/page.tsx`**: ログイン画面
+### フfrontend/src/app/page.tsx`**: メインページ（シミュレーション画面）
+- **`frontend/src/app/login/page.tsx`**: ログイン画面
+- **`frontend/src/app/login/page.tsx`**: ログイン画面
 - **`src/components/ui/`**: shadcn/uiコンポーネント
 
 ## ドキュメント
