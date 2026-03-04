@@ -1,27 +1,35 @@
 import json
+import logging
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from engine import SimulationEngine
 from manager import SimulationManager
 
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"])
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
+logger = logging.getLogger(__name__)
 
-# インスタンス化
 engine = SimulationEngine()
-engine.spawn(initial=True) # 初期細菌
+engine.spawn(initial=True)
 manager = SimulationManager(engine)
-
-@app.on_event("startup")
-async def startup():
-    import asyncio
-    asyncio.create_task(manager.run_loop(broadcast_state))
-
 active_websockets = []
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting background task...")
+    task = asyncio.create_task(manager.run_loop(broadcast_state))
+    yield
+    task.cancel()
+
 async def broadcast_state(data):
+    msg = json.dumps(data)
     for ws in active_websockets:
-        await ws.send_text(json.dumps(data))
+        try: await ws.send_text(msg)
+        except: active_websockets.remove(ws)
+
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"])
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -31,13 +39,11 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_text()
             msg = json.loads(data)
-            # プレイヤー操作の反映
             if msg["type"] == "RESUME": manager.is_running = True
             if msg["type"] == "PAUSE": manager.is_running = False
             if msg["type"] == "SET_ENV":
                 manager.env_params[0] = msg["temp"]
                 manager.env_params[1] = msg["rad"]
-                manager.history_logs.append(f"User adjusted Temp to {msg['temp']}°C")
     except WebSocketDisconnect:
         active_websockets.remove(websocket)
 
