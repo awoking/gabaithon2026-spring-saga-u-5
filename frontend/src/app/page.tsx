@@ -459,7 +459,7 @@ export default function Home() {
         <div className="max-w-4xl mx-auto">
           <div className="mb-8">
             <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-              SAGA-U 微生物進化シミュレーター
+              細菌シュミレーター
             </h1>
             <p className="text-slate-400">初期設定</p>
             <span className={`inline-block mt-2 px-3 py-1 rounded-full text-sm ${isConnected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
@@ -593,7 +593,7 @@ export default function Home() {
               disabled={!isConnected}
               className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-12 py-6 text-lg font-bold"
             >
-              🚀 シミュレーション開始
+              シミュレーション開始
             </Button>
           </div>
 

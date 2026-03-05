@@ -171,7 +171,7 @@ export default function StartPage() {
       localStorage.setItem("initialStrainConfig", JSON.stringify(strain));
     } catch {
     }
-    router.push("/");
+    router.push("/game");
   };
 
   return (
