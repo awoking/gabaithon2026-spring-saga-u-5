@@ -67,11 +67,22 @@ const DEFAULT_ENV = {
   pH0: 7.0,
   temp: 25.0,
   rad: 0.0,
+  k_tox: 1.0,
+  k_rad: 1.0,
+  k_acid: 0.0,
   Y: 100.0,
+  d_T: 0.1,
+  hgt_prob: 0.005,
+  D: 0.0,
+  S_in: 0.0,
   auto_feed_enabled: true,
   feed_per_batch: 200.0,
   feed_max_s: 10000.0,
   batch_size: 100,
+  max_rel_change_per_step: 0.05,
+  max_abs_s_change_per_step: 0.05,
+  k_hgt: 1e-9,
+  division_threshold: 5000.0,
 };
 
 export default function Home() {
@@ -80,6 +91,7 @@ export default function Home() {
   const [isPaused, setIsPaused] = useState(false);
   const [data, setData] = useState<SimulationData | null>(null);
   const [finalStep, setFinalStep] = useState(0);
+  const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const isRunningRef = useRef(false);
 
@@ -175,6 +187,7 @@ export default function Home() {
     setIsPaused(false);
     setData(null);
     setFinalStep(0);
+    setShowAdvancedSetup(false);
     setStrainConfig(DEFAULT_STRAIN);
     setEnvConfig(DEFAULT_ENV);
   };
@@ -184,16 +197,28 @@ export default function Home() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white p-6">
         <div className="max-w-4xl mx-auto">
-          <div className="mb-8">
-            <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-              SAGA-U 微生物進化シミュレーター
-            </h1>
-            <p className="text-slate-400">初期設定</p>
-            <span className={`inline-block mt-2 px-3 py-1 rounded-full text-sm ${isConnected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-              {isConnected ? '● サーバー接続中' : '○ サーバー未接続'}
-            </span>
+          <div className="mb-8 flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+                SAGA-U 微生物進化シミュレーター
+              </h1>
+              <p className="text-slate-400">初期設定</p>
+              <span className={`inline-block mt-2 px-3 py-1 rounded-full text-sm ${isConnected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                {isConnected ? '● サーバー接続中' : '○ サーバー未接続'}
+              </span>
+            </div>
+            <div className="shrink-0">
+              <Button
+                type="button"
+                onClick={() => setShowAdvancedSetup((prev) => !prev)}
+                className="bg-indigo-600 text-white hover:bg-indigo-500 border border-indigo-400/40 shadow-md shadow-indigo-900/30"
+              >
+                {showAdvancedSetup ? '▲ 上級者向け項目を閉じる' : '▼ 上級者向け項目を表示'}
+              </Button>
+            </div>
           </div>
 
+          {showAdvancedSetup && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             {/* 初期株設定 */}
             <Card className="bg-slate-800/50 border-slate-700">
@@ -201,66 +226,95 @@ export default function Home() {
                 <CardTitle className="text-white">初期株設定</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div>
-                  <Label className="text-slate-300">μ_max (最大成長速度)</Label>
-                  <Input
-                    type="number"
-                    step="0.1"
-                    value={strainConfig.mu_max}
-                    onChange={(e) => setStrainConfig({...strainConfig, mu_max: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-slate-300">Ks (モノド定数)</Label>
-                  <Input
-                    type="number"
-                    step="0.1"
-                    value={strainConfig.Ks}
-                    onChange={(e) => setStrainConfig({...strainConfig, Ks: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-slate-300">p (毒素生産能)</Label>
-                  <Input
-                    type="number"
-                    step="0.1"
-                    value={strainConfig.p}
-                    onChange={(e) => setStrainConfig({...strainConfig, p: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-slate-300">N0 (初期個体数)</Label>
-                  <Input
-                    type="number"
-                    step="10"
-                    value={strainConfig.N0}
-                    onChange={(e) => setStrainConfig({...strainConfig, N0: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-slate-300">T_opt (最適温度 °C)</Label>
-                  <Input
-                    type="number"
-                    step="1"
-                    value={strainConfig.T_opt}
-                    onChange={(e) => setStrainConfig({...strainConfig, T_opt: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-slate-300">pH_opt (最適pH)</Label>
-                  <Input
-                    type="number"
-                    step="0.1"
-                    value={strainConfig.pH_opt}
-                    onChange={(e) => setStrainConfig({...strainConfig, pH_opt: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
+                {!showAdvancedSetup && (
+                  <div className="rounded-md border border-slate-700 bg-slate-900/30 px-3 py-2 text-sm text-slate-400">
+                    右上の「上級者向け項目を表示」を押すと、設定項目が表示されます。
+                  </div>
+                )}
+                {showAdvancedSetup && (
+                  <>
+                    <div>
+                      <Label className="text-slate-300">最大成長速度 (μ_max)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={strainConfig.mu_max}
+                        onChange={(e) => setStrainConfig({...strainConfig, mu_max: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">モノド定数 (Ks)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={strainConfig.Ks}
+                        onChange={(e) => setStrainConfig({...strainConfig, Ks: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">毒素生産能 (p)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={strainConfig.p}
+                        onChange={(e) => setStrainConfig({...strainConfig, p: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">初期個体数 (N0)</Label>
+                      <Input
+                        type="number"
+                        step="10"
+                        value={strainConfig.N0}
+                        onChange={(e) => setStrainConfig({...strainConfig, N0: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">最適温度 (T_opt, °C)</Label>
+                      <Input
+                        type="number"
+                        step="1"
+                        value={strainConfig.T_opt}
+                        onChange={(e) => setStrainConfig({...strainConfig, T_opt: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">最適pH (pH_opt)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={strainConfig.pH_opt}
+                        onChange={(e) => setStrainConfig({...strainConfig, pH_opt: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">毒素耐性 (r)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={strainConfig.r}
+                        onChange={(e) => setStrainConfig({...strainConfig, r: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">放射線耐性 (Rad_res)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={strainConfig.Rad_res}
+                        onChange={(e) => setStrainConfig({...strainConfig, Rad_res: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
 
@@ -270,70 +324,229 @@ export default function Home() {
                 <CardTitle className="text-white">環境設定</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div>
-                  <Label className="text-slate-300">S0 (初期基質濃度)</Label>
-                  <Input
-                    type="number"
-                    step="10"
-                    value={envConfig.S0}
-                    onChange={(e) => setEnvConfig({...envConfig, S0: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-slate-300">温度 (°C)</Label>
-                  <Input
-                    type="number"
-                    step="1"
-                    value={envConfig.temp}
-                    onChange={(e) => setEnvConfig({...envConfig, temp: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-slate-300">放射線レベル</Label>
-                  <Input
-                    type="number"
-                    step="0.1"
-                    value={envConfig.rad}
-                    onChange={(e) => setEnvConfig({...envConfig, rad: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-slate-300">Y (収率)</Label>
-                  <Input
-                    type="number"
-                    step="10"
-                    value={envConfig.Y}
-                    onChange={(e) => setEnvConfig({...envConfig, Y: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-slate-300">自動供給量/バッチ</Label>
-                  <Input
-                    type="number"
-                    step="10"
-                    value={envConfig.feed_per_batch}
-                    onChange={(e) => setEnvConfig({...envConfig, feed_per_batch: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
-                <div>
-                  <Label className="text-slate-300">バッチ数 (1ループあたり)</Label>
-                  <Input
-                    type="number"
-                    step="1"
-                    min="1"
-                    value={envConfig.batch_size}
-                    onChange={(e) => setEnvConfig({...envConfig, batch_size: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                </div>
+                {!showAdvancedSetup && (
+                  <div className="rounded-md border border-slate-700 bg-slate-900/30 px-3 py-2 text-sm text-slate-400">
+                    右上の「上級者向け項目を表示」を押すと、設定項目が表示されます。
+                  </div>
+                )}
+                {showAdvancedSetup && (
+                  <>
+                    <div>
+                      <Label className="text-slate-300">初期基質濃度 (S0)</Label>
+                      <Input
+                        type="number"
+                        step="10"
+                        value={envConfig.S0}
+                        onChange={(e) => setEnvConfig({...envConfig, S0: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">環境温度 (temp, °C)</Label>
+                      <Input
+                        type="number"
+                        step="1"
+                        value={envConfig.temp}
+                        onChange={(e) => setEnvConfig({...envConfig, temp: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">放射線レベル (rad)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={envConfig.rad}
+                        onChange={(e) => setEnvConfig({...envConfig, rad: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">収率 (Y)</Label>
+                      <Input
+                        type="number"
+                        step="10"
+                        value={envConfig.Y}
+                        onChange={(e) => setEnvConfig({...envConfig, Y: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">自動供給量/バッチ (feed_per_batch)</Label>
+                      <Input
+                        type="number"
+                        step="10"
+                        value={envConfig.feed_per_batch}
+                        onChange={(e) => setEnvConfig({...envConfig, feed_per_batch: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">バッチ数 (batch_size, 1ループあたり)</Label>
+                      <Input
+                        type="number"
+                        step="1"
+                        min="1"
+                        value={envConfig.batch_size}
+                        onChange={(e) => setEnvConfig({...envConfig, batch_size: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">初期毒素濃度 (T0)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={envConfig.T0}
+                        onChange={(e) => setEnvConfig({...envConfig, T0: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">初期pH (pH0)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={envConfig.pH0}
+                        onChange={(e) => setEnvConfig({...envConfig, pH0: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">毒素ストレス係数 (k_tox)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={envConfig.k_tox}
+                        onChange={(e) => setEnvConfig({...envConfig, k_tox: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">放射線ストレス係数 (k_rad)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={envConfig.k_rad}
+                        onChange={(e) => setEnvConfig({...envConfig, k_rad: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">酸性化係数 (k_acid)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        value={envConfig.k_acid}
+                        onChange={(e) => setEnvConfig({...envConfig, k_acid: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">毒素減衰率 (d_T)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={envConfig.d_T}
+                        onChange={(e) => setEnvConfig({...envConfig, d_T: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">HGT取り込み確率 (hgt_prob)</Label>
+                      <Input
+                        type="number"
+                        step="0.001"
+                        value={envConfig.hgt_prob}
+                        onChange={(e) => setEnvConfig({...envConfig, hgt_prob: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">希釈率 (D)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={envConfig.D}
+                        onChange={(e) => setEnvConfig({...envConfig, D: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">流入基質濃度 (S_in)</Label>
+                      <Input
+                        type="number"
+                        step="1"
+                        value={envConfig.S_in}
+                        onChange={(e) => setEnvConfig({...envConfig, S_in: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">自動供給上限S (feed_max_s)</Label>
+                      <Input
+                        type="number"
+                        step="10"
+                        value={envConfig.feed_max_s}
+                        onChange={(e) => setEnvConfig({...envConfig, feed_max_s: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border border-slate-600 bg-slate-700 px-3 py-2">
+                      <Label className="text-slate-300">自動供給ON/OFF (auto_feed_enabled)</Label>
+                      <input
+                        type="checkbox"
+                        checked={envConfig.auto_feed_enabled}
+                        onChange={(e) => setEnvConfig({...envConfig, auto_feed_enabled: e.target.checked})}
+                        className="h-4 w-4"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">最大相対変化率/step (max_rel_change_per_step)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={envConfig.max_rel_change_per_step}
+                        onChange={(e) => setEnvConfig({...envConfig, max_rel_change_per_step: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">S最大絶対変化量/step (max_abs_s_change_per_step)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={envConfig.max_abs_s_change_per_step}
+                        onChange={(e) => setEnvConfig({...envConfig, max_abs_s_change_per_step: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">株間HGT率係数 (k_hgt)</Label>
+                      <Input
+                        type="number"
+                        step="1e-9"
+                        value={envConfig.k_hgt}
+                        onChange={(e) => setEnvConfig({...envConfig, k_hgt: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-slate-300">分裂しきい値 (division_threshold)</Label>
+                      <Input
+                        type="number"
+                        step="1"
+                        value={envConfig.division_threshold}
+                        onChange={(e) => setEnvConfig({...envConfig, division_threshold: Number(e.target.value)})}
+                        className="bg-slate-700 border-slate-600 text-white"
+                      />
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           </div>
+          )}
 
           <div className="flex justify-center">
             <Button
