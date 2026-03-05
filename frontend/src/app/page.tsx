@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { BarChart3, Activity, Thermometer, Droplets, Zap, FlaskConical, Play } from "lucide-react";
+import { ColosseumChamber } from "@/components/ColosseumChamber";
 
 type SimulationState = 'setup' | 'running' | 'finished';
 
@@ -417,7 +418,7 @@ export default function Home() {
       <div className="max-w-full">
         
         {/* ヘッダー & インラインコントロール・ツールバー */}
-        <header className="flex flex-wrap items-center justify-between gap-6 bg-slate-900/60 p-4 border border-slate-800 rounded-2xl backdrop-blur-md mb-8">
+        <header className="flex flex-wrap items-center gap-6 bg-slate-900/60 p-4 border border-slate-800 rounded-2xl backdrop-blur-md mb-8">
           <div className="flex items-center gap-6">
             <h1 className="text-3xl font-black tracking-tighter text-emerald-400 italic shrink-0">
               Micro-Colosseum
@@ -502,6 +503,25 @@ export default function Home() {
               反映
             </Button>
           </div>
+          <div className="flex items-center gap-6 px-6 border-slate-800 ml-4">
+            {[
+              { label: "基質濃度(S)", val: data?.env.S.toFixed(1), icon: <Droplets className="text-yellow-400" size={18} /> },
+              { label: "現在温度", val: `${data?.env.temp.toFixed(1)}°C`, icon: <Thermometer className="text-orange-400" size={18} /> },
+              { label: "放射線レベル", val: data?.env.rad.toFixed(1), icon: <Zap className="text-pink-400" size={18} /> },
+              { label: "環境pH", val: data?.env.pH.toFixed(1), icon: <FlaskConical className="text-cyan-400" size={18} /> }
+            ].map((env) => (
+              <div key={env.label} className="flex flex-col items-start min-w-[60px]">
+                <div className="flex flex-column items-center gap-1 text-[9px] text-slate-500 font-bold uppercase tracking-tighter">
+                  {env.icon}
+                  <span className="text-[10px]">{env.label}</span>
+                </div>
+                <div className="font-mono text-xs font-bold text-white leading-none mt-0.5">
+                  {env.val ?? "--"}
+                </div>
+              </div>
+            ))}
+          </div>
+
         </header>
             {/* 統計情報 */}
             {/* 右側に配置するダッシュボードボタン */}
@@ -544,25 +564,6 @@ export default function Home() {
                           ))}
                         </div>
                       </section>
-
-                      {/* 環境状態セクション */}
-                      <section className="space-y-3">
-                        <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">Environment Log</h3>
-                        {[
-                          { label: "基質濃度 (S)", val: data.env.S.toFixed(1), icon: <Droplets className="text-yellow-400" size={16} /> },
-                          { label: "現在温度", val: `${data.env.temp.toFixed(1)}°C`, icon: <Thermometer className="text-orange-400" size={16} /> },
-                          { label: "放射線レベル", val: data.env.rad.toFixed(2), icon: <Zap className="text-pink-400" size={16} /> },
-                          { label: "環境pH", val: data.env.pH.toFixed(2), icon: <FlaskConical className="text-cyan-400" size={16} /> }
-                        ].map((env) => (
-                          <div key={env.label} className="flex justify-between items-center bg-slate-950/50 p-4 rounded-xl border border-slate-800">
-                            <div className="flex items-center gap-3">
-                              {env.icon}
-                              <span className="text-sm font-medium">{env.label}</span>
-                            </div>
-                            <span className="font-mono font-bold text-white">{env.val}</span>
-                          </div>
-                        ))}
-                      </section>
                     </div>
                   ) : (
                     <div className="text-center py-20 text-slate-600 font-mono text-sm animate-pulse">
@@ -573,43 +574,47 @@ export default function Home() {
               </Sheet>
             </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 px-6">
             {/* 株ランキング */}
-            {data && data.ranking.length > 0 && (
-              <Card className="bg-slate-800/50 border-slate-700">
-                <CardHeader>
-                  <CardTitle className="text-white">株ランキング (Top 10)</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="border-b border-slate-700">
-                        <tr className="text-slate-400">
-                          <th className="text-left p-2">ID</th>
-                          <th className="text-right p-2">個体数</th>
-                          <th className="text-right p-2">μ_max</th>
-                          <th className="text-right p-2">Ks</th>
-                          <th className="text-right p-2">T_opt</th>
-                          <th className="text-right p-2">pH_opt</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.ranking.slice(0, 10).map((strain) => (
-                          <tr key={strain.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                            <td className="p-2 font-mono text-blue-400">#{strain.id}</td>
-                            <td className="p-2 text-right font-mono text-green-400">{strain.N.toFixed(1)}</td>
-                            <td className="p-2 text-right font-mono text-purple-400">{strain.mu_max.toFixed(2)}</td>
-                            <td className="p-2 text-right font-mono text-cyan-400">{strain.Ks.toFixed(2)}</td>
-                            <td className="p-2 text-right font-mono text-orange-400">{strain.T_opt.toFixed(1)}</td>
-                            <td className="p-2 text-right font-mono text-pink-400">{strain.pH_opt.toFixed(1)}</td>
+            <div className="lg:col-span-1">
+              {data && data.ranking.length > 0 && (
+                <Card className="bg-slate-800/50 border-slate-700">
+                  <CardHeader>
+                    <CardTitle className="text-white">株ランキング (Top 10)</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="border-b border-slate-700">
+                          <tr className="text-slate-400">
+                            <th className="text-left p-2">ID</th>
+                            <th className="text-right p-2">個体数</th>
+                            <th className="text-right p-2">μ_max</th>
+                            <th className="text-right p-2">Ks</th>
+                            <th className="text-right p-2">T_opt</th>
+                            <th className="text-right p-2">pH_opt</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+                        </thead>
+                        <tbody>
+                          {data.ranking.slice(0, 10).map((strain) => (
+                            <tr key={strain.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                              <td className="p-2 font-mono text-blue-400">#{strain.id}</td>
+                              <td className="p-2 text-right font-mono text-green-400">{strain.N.toFixed(1)}</td>
+                              <td className="p-2 text-right font-mono text-purple-400">{strain.mu_max.toFixed(2)}</td>
+                              <td className="p-2 text-right font-mono text-cyan-400">{strain.Ks.toFixed(2)}</td>
+                              <td className="p-2 text-right font-mono text-orange-400">{strain.T_opt.toFixed(1)}</td>
+                              <td className="p-2 text-right font-mono text-pink-400">{strain.pH_opt.toFixed(1)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+            <ColosseumChamber data={data} />
+          </div>
 
             {/* データ待機 */}
             {!data && (
@@ -626,6 +631,5 @@ export default function Home() {
             )}
           </div>
         </div>
-      </div>
   );
 }
