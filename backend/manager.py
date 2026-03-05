@@ -19,6 +19,7 @@ class SimulationManager:
         self.history_logs = []
         self.hgt_count = 0
         self.division_count = 0
+        self.division_threshold = 5000.0
         self.k_hgt = 1e-9  # HGT rate constant
         self.auto_feed_enabled = True  # 離散的自動供給を使用
         self.feed_per_batch = 200.0
@@ -32,6 +33,9 @@ class SimulationManager:
         self.max_rel_change_per_step = 0.05
         self.max_abs_s_change_per_step = 0.05
 
+    def _active_indices(self):
+        return np.where(self.engine.active_mask)[0]
+
     def apply_nutrient_feed(self):
         if not self.auto_feed_enabled:
             return
@@ -41,7 +45,7 @@ class SimulationManager:
         if not self.adaptive_dt_enabled:
             return self.dt_max
 
-        active_idx = np.where(self.engine.active_mask)[0]
+        active_idx = self._active_indices()
         if len(active_idx) == 0:
             return self.dt_max
 
@@ -101,7 +105,7 @@ class SimulationManager:
         self.engine.reap()
 
         # 分裂処理
-        div_count = self.engine.division_trigger(threshold=50.0)
+        div_count = self.engine.division_trigger(threshold=self.division_threshold)
         self.division_count += div_count
 
         # プール更新
@@ -130,7 +134,7 @@ class SimulationManager:
         await asyncio.sleep(0.01)
 
     def get_snapshot(self):
-        active_idx = np.where(self.engine.active_mask)[0]
+        active_idx = self._active_indices()
         sorted_idx = active_idx[np.argsort(self.engine.N[active_idx])[::-1]]
         
         # ランキング形質を含む詳細情報
@@ -168,11 +172,6 @@ class SimulationManager:
                 "plasmids": self.engine.plasmid_pool.tolist(),
                 "concentrations": self.engine.pool_conc.tolist()
             },
-            "scatter": {
-                "x": self.engine.traits[active_idx, 0].tolist(),
-                "y": self.engine.traits[active_idx, 1].tolist(),
-                "n": self.engine.N[active_idx].tolist()
-            },
             "stats": {
                 "total_N": float(np.sum(self.engine.N[active_idx])) if len(active_idx) > 0 else 0.0,
                 "active_strains": int(len(active_idx)),
@@ -186,7 +185,7 @@ class SimulationManager:
         水平伝播（HGT）イベント実行：両株間でプラスミド交換
         P_HGT = k_HGT * N_i * N_j * dt
         """
-        active_idx = np.where(self.engine.active_mask)[0]
+        active_idx = self._active_indices()
         hgt_threshold = 10.0  # HGT対象外の低個体数
         major_strains = active_idx[self.engine.N[active_idx] > hgt_threshold]
         
