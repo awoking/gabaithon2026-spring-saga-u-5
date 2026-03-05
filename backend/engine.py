@@ -17,6 +17,25 @@ class SimulationEngine:
         self.plasmid_pool = np.zeros((self.pool_size, 3))
         self.pool_conc = np.zeros(self.pool_size)
 
+        # 系統追跡（計算本体とは分離したメタデータ）
+        self.parent_ids = np.full(max_strains, -1, dtype=np.int64)
+        self.birth_steps = np.full(max_strains, -1, dtype=np.int64)
+        self.birth_event_codes = np.zeros(max_strains, dtype=np.int8)
+
+        # IDベース永続マップ（死滅/スロット再利用後も祖先探索可能）
+        self.lineage_parent_by_id = {}
+        self.lineage_birth_step_by_id = {}
+        self.lineage_birth_event_by_id = {}
+
+        self.birth_event_to_code = {
+            "unknown": 0,
+            "initial": 1,
+            "division": 2,
+            "mutation": 3,
+            "hgt": 4,
+        }
+        self.code_to_birth_event = {v: k for k, v in self.birth_event_to_code.items()}
+
     def calculate_maintenance(self, traits):
         """
         7項目加重和による維持コスト計算
@@ -42,7 +61,7 @@ class SimulationEngine:
                 w6 * np.abs(pH_opt - 7.0) + 
                 w7 * Rad_res)
 
-    def spawn(self, parent_idx=None, initial=False, initial_N=None):
+    def spawn(self, parent_idx=None, initial=False, initial_N=None, birth_event=None):
         if not self.free_indices: return None
         idx = self.free_indices.pop()
         
@@ -71,9 +90,88 @@ class SimulationEngine:
             self.N[idx] = 1.0
         
         self.ids[idx] = self.next_id
+        child_id = int(self.next_id)
+
+        parent_id = -1
+        if not initial and parent_idx is not None:
+            parent_id = int(self.ids[parent_idx])
+
+        event_name = "initial" if initial else (birth_event or "mutation")
+        event_code = self.birth_event_to_code.get(event_name, 0)
+
+        self.parent_ids[idx] = parent_id
+        self.birth_steps[idx] = int(self.total_steps)
+        self.birth_event_codes[idx] = event_code
+
+        self.lineage_parent_by_id[child_id] = parent_id
+        self.lineage_birth_step_by_id[child_id] = int(self.total_steps)
+        self.lineage_birth_event_by_id[child_id] = event_name
+
         self.active_mask[idx] = True
         self.next_id += 1
         return self.ids[idx]
+
+    def find_index_by_id(self, strain_id):
+        idx_candidates = np.where(self.ids == strain_id)[0]
+        if len(idx_candidates) == 0:
+            return None
+        return int(idx_candidates[0])
+
+    def get_lineage(self, strain_id, max_depth=200):
+        target_id = int(strain_id)
+        depth_limit = max(1, int(max_depth))
+
+        nodes = []
+        visited = set()
+        current_id = target_id
+        truncated = False
+
+        for _ in range(depth_limit):
+            if current_id in visited:
+                break
+            visited.add(current_id)
+
+            parent_id = int(self.lineage_parent_by_id.get(current_id, -1))
+            birth_step = int(self.lineage_birth_step_by_id.get(current_id, -1))
+            birth_event = self.lineage_birth_event_by_id.get(current_id, "unknown")
+
+            node = {
+                "id": int(current_id),
+                "parent_id": parent_id,
+                "birth_step": birth_step,
+                "birth_event": birth_event,
+            }
+
+            idx = self.find_index_by_id(current_id)
+            if idx is not None:
+                node["alive"] = bool(self.active_mask[idx])
+                node["N"] = float(self.N[idx])
+                node["traits"] = {
+                    "mu_max": float(self.traits[idx, 0]),
+                    "Ks": float(self.traits[idx, 1]),
+                    "p": float(self.traits[idx, 2]),
+                    "r": float(self.traits[idx, 3]),
+                    "T_opt": float(self.traits[idx, 4]),
+                    "pH_opt": float(self.traits[idx, 5]),
+                    "Rad_res": float(self.traits[idx, 6]),
+                }
+            else:
+                node["alive"] = False
+
+            nodes.append(node)
+
+            if parent_id < 0:
+                break
+            current_id = parent_id
+        else:
+            truncated = True
+
+        return {
+            "target_id": target_id,
+            "nodes": nodes,
+            "depth": len(nodes),
+            "truncated": truncated,
+        }
 
     def refresh_env_pool(self):
         """1万ステップごとのプール更新"""
@@ -91,6 +189,9 @@ class SimulationEngine:
         for idx in dead_indices:
             self.active_mask[idx] = False
             self.N[idx] = 0.0
+            self.parent_ids[idx] = -1
+            self.birth_steps[idx] = -1
+            self.birth_event_codes[idx] = 0
             self.free_indices.append(idx)
         return len(dead_indices)
 
@@ -122,7 +223,7 @@ class SimulationEngine:
             parent_N = self.N[idx]
             self.N[idx] = parent_N / 2.0
             # Spawn daughter cell (親と同じ形質、同じ個体数で分裂)
-            daughter_id = self.spawn(parent_idx=idx, initial_N=parent_N / 2.0)
+            daughter_id = self.spawn(parent_idx=idx, initial_N=parent_N / 2.0, birth_event="division")
             if daughter_id is not None:
                 division_count += 1
         return division_count
