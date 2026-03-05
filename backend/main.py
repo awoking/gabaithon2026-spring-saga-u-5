@@ -136,7 +136,7 @@ async def handle_start_message(msg: Dict[str, Any]):
     logger.info(f"Simulation started - S={manager.S}, N={engine.N[idx]}, mu_max={engine.traits[idx,0]}")
 
 
-async def handle_control_message(msg: Dict[str, Any]):
+async def handle_control_message(msg: Dict[str, Any], websocket: WebSocket):
     global step_requested
     msg_type = msg.get("type")
 
@@ -202,6 +202,26 @@ async def handle_control_message(msg: Dict[str, Any]):
 
     if msg_type == "SET_RUNTIME_PARAMS":
         apply_runtime_params(msg)
+        return
+
+    if msg_type == "GET_LINEAGE":
+        strain_id = _to_int(msg.get("strain_id"), -1)
+        max_depth = max(1, _to_int(msg.get("max_depth"), 200))
+        if strain_id < 0:
+            await send_to_websocket(websocket, {
+                "type": "LINEAGE_DATA",
+                "ok": False,
+                "error": "invalid_strain_id",
+            })
+            return
+
+        lineage = engine.get_lineage(strain_id=strain_id, max_depth=max_depth)
+        await send_to_websocket(websocket, {
+            "type": "LINEAGE_DATA",
+            "ok": True,
+            "lineage": lineage,
+        })
+        return
 
 
 async def check_and_notify_extinction():
@@ -256,6 +276,13 @@ async def broadcast_state(data):
     for ws in disconnected:
         active_websockets.remove(ws)
 
+
+async def send_to_websocket(websocket: WebSocket, data: Dict[str, Any]):
+    try:
+        await websocket.send_text(json.dumps(data))
+    except Exception:
+        logger.exception("Failed to send message to websocket")
+
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"])
 
@@ -272,7 +299,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if msg.get("type") == "START":
                 await handle_start_message(msg)
             else:
-                await handle_control_message(msg)
+                await handle_control_message(msg, websocket)
                     
     except WebSocketDisconnect:
         active_websockets.remove(websocket)

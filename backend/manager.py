@@ -121,7 +121,7 @@ class SimulationManager:
             active = np.where(self.engine.active_mask)[0]
             if len(active) > 0:
                 parent_idx = np.random.choice(active)
-                self.engine.spawn(parent_idx=parent_idx)  # spawn() は自動的に突然変異を加える
+                self.engine.spawn(parent_idx=parent_idx, birth_event="mutation")  # spawn() は自動的に突然変異を加える
 
         logger.info(f"Step: {self.engine.total_steps:,} | Strains: {np.sum(self.engine.active_mask)} | "
                    f"S: {self.S:.3f} | dt: {dt:.4f} | D: {self.env_params[8]:.3f} | Div: {div_count} | HGT: {hgt_count}")
@@ -214,7 +214,7 @@ class SimulationManager:
                         new_traits[6] = self.engine.traits[j, 6]
                     
                     # 新株をspawn
-                    new_id = self.engine.spawn(parent_idx=i)
+                    new_id = self.engine.spawn(parent_idx=i, birth_event="hgt")
                     if new_id is not None:
                         idx_candidates = np.where((self.engine.ids == new_id) & self.engine.active_mask)[0]
                         if len(idx_candidates) > 0:
