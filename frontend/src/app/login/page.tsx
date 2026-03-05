@@ -1,9 +1,13 @@
+"use client";
+
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 
 export default function LoginPage() {
+    const router = useRouter();
     return (
         <main className="min-h-screen w-full flex flex-col items-center justify-center bg-gradient-to-b from-green-500 via-orange-500 to-yellow-500 p-4">
 
@@ -21,7 +25,11 @@ export default function LoginPage() {
             </Card>
 
             <div className="mt-8 flex flex-col items-center gap-2">
-                <Button size="lg" className="bg-blue-500 hover:bg-blue-600 hover:scale-105 active:scale-100 transition-transform duration-200 text-white text-3xl px-12 py-8 rounded-2xl shadow-lg">
+                <Button
+                    size="lg"
+                    onClick={() => router.push("/start")}
+                    className="bg-blue-500 hover:bg-blue-600 hover:scale-105 active:scale-100 transition-transform duration-200 text-white text-3xl px-12 py-8 rounded-2xl shadow-lg"
+                >
                     誕生させる
                 </Button>
             </div>
