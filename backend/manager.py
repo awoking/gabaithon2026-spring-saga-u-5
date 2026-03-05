@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 class SimulationManager:
     def __init__(self, engine):
         self.engine = engine
-        self.is_running = True
+        self.is_running = False
         # ========== 安定デモ用プリセット（実世界近似とは分離） ==========
         # 離散的自動供給（auto_feed）ベースで安定性を確保
         self.S, self.T, self.pH = 500.0, 0.0, 7.0
@@ -23,6 +23,7 @@ class SimulationManager:
         self.auto_feed_enabled = True  # 離散的自動供給を使用
         self.feed_per_batch = 200.0
         self.feed_max_s = 10000.0
+        self.batch_size = 100
 
         # adaptive dt settings
         self.adaptive_dt_enabled = True
@@ -76,9 +77,9 @@ class SimulationManager:
         dt = min(self.dt_max, dt_by_n, dt_by_s)
         return max(self.dt_min, dt)
 
-    async def run_loop(self, broadcast_fn):
-        batch_size = 100
-        if not self.is_running:
+    async def run_loop(self, broadcast_fn, force_step=False):
+        batch_size = max(1, int(self.batch_size))
+        if not self.is_running and not force_step:
             await asyncio.sleep(0.01)
             return
 

@@ -63,6 +63,7 @@ const DEFAULT_ENV = {
   auto_feed_enabled: true,
   feed_per_batch: 200.0,
   feed_max_s: 10000.0,
+  batch_size: 100,
 };
 
 export default function Home() {
@@ -148,6 +149,17 @@ export default function Home() {
     }
   };
 
+  const handleStep = () => {
+    sendMessage({ type: "STEP" });
+  };
+
+  const handleSetBatchSize = () => {
+    sendMessage({
+      type: "SET_BATCH_SIZE",
+      batch_size: Math.max(1, Math.floor(envConfig.batch_size)),
+    });
+  };
+
   const handleReset = () => {
     isRunningRef.current = false;
     sendMessage({ type: "RESET" });
@@ -198,6 +210,16 @@ export default function Home() {
                     step="0.1"
                     value={strainConfig.Ks}
                     onChange={(e) => setStrainConfig({...strainConfig, Ks: Number(e.target.value)})}
+                    className="bg-slate-700 border-slate-600 text-white"
+                  />
+                </div>
+                <div>
+                  <Label className="text-slate-300">p (毒素生産能)</Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    value={strainConfig.p}
+                    onChange={(e) => setStrainConfig({...strainConfig, p: Number(e.target.value)})}
                     className="bg-slate-700 border-slate-600 text-white"
                   />
                 </div>
@@ -287,6 +309,17 @@ export default function Home() {
                     step="10"
                     value={envConfig.feed_per_batch}
                     onChange={(e) => setEnvConfig({...envConfig, feed_per_batch: Number(e.target.value)})}
+                    className="bg-slate-700 border-slate-600 text-white"
+                  />
+                </div>
+                <div>
+                  <Label className="text-slate-300">バッチ数 (1ループあたり)</Label>
+                  <Input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={envConfig.batch_size}
+                    onChange={(e) => setEnvConfig({...envConfig, batch_size: Number(e.target.value)})}
                     className="bg-slate-700 border-slate-600 text-white"
                   />
                 </div>
@@ -408,12 +441,36 @@ export default function Home() {
                   {isPaused ? '▶ 再開' : '⏸ 一時停止'}
                 </Button>
                 <Button
+                  onClick={handleStep}
+                  disabled={!isPaused}
+                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 disabled:text-slate-400"
+                >
+                  ⏭ 1ステップ実行
+                </Button>
+                <Button
                   onClick={handleReset}
                   variant="outline"
                   className="w-full border-slate-600 text-slate-300 hover:bg-slate-700"
                 >
                   ↻ 中止して設定に戻る
                 </Button>
+                <div className="pt-2 border-t border-slate-700 space-y-2">
+                  <Label className="text-slate-300">実行中バッチ数</Label>
+                  <Input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={envConfig.batch_size}
+                    onChange={(e) => setEnvConfig({...envConfig, batch_size: Number(e.target.value)})}
+                    className="bg-slate-700 border-slate-600 text-white"
+                  />
+                  <Button
+                    onClick={handleSetBatchSize}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    バッチ数を反映
+                  </Button>
+                </div>
               </CardContent>
             </Card>
 

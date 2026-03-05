@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 engine = None
 manager = None
 active_websockets = []
+step_requested = False
 
 def initialize_simulation():
     """シミュレーションを初期化"""
@@ -34,17 +35,22 @@ async def lifespan(app: FastAPI):
 
 async def run_simulation_loop():
     """シミュレーションループ（絶滅検出付き）"""
+    global step_requested
     while True:
         try:
-            if manager and manager.is_running:
+            if manager and (manager.is_running or step_requested):
                 # 通常のループ実行
-                await manager.run_loop(broadcast_state)
+                force_step = (not manager.is_running) and step_requested
+                await manager.run_loop(broadcast_state, force_step=force_step)
+                if force_step:
+                    step_requested = False
 
                 # 絶滅チェック
                 active_idx = np.where(engine.active_mask)[0]
                 if len(active_idx) == 0:
                     logger.warning("Extinction detected - simulation stopped")
                     manager.is_running = False
+                    step_requested = False
                     # 絶滅通知を送信
                     await broadcast_state({
                         "type": "SIMULATION_ENDED",
@@ -75,6 +81,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"])
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    global step_requested
     await websocket.accept()
     active_websockets.append(websocket)
     logger.info(f"WebSocket connected (total: {len(active_websockets)})")
@@ -119,6 +126,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     manager.auto_feed_enabled = env_config.get("auto_feed_enabled", True)
                     manager.feed_per_batch = env_config.get("feed_per_batch", 200.0)
                     manager.feed_max_s = env_config.get("feed_max_s", 10000.0)
+                    manager.batch_size = max(1, int(env_config.get("batch_size", 100)))
                 
                 manager.is_running = True
                 logger.info(f"Simulation started - S={manager.S}, N={engine.N[idx]}, mu_max={engine.traits[idx,0]}")
@@ -134,6 +142,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 
             elif msg["type"] == "PAUSE":
                 manager.is_running = False
+
+            elif msg["type"] == "STEP":
+                if manager:
+                    step_requested = True
                 
             elif msg["type"] == "SET_ENV":
                 manager.env_params[0] = msg["temp"]
@@ -160,6 +172,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     manager.feed_per_batch = max(0.0, float(msg["per_batch"]))
                 if "max_s" in msg:
                     manager.feed_max_s = max(0.0, float(msg["max_s"]))
+
+            elif msg["type"] == "SET_BATCH_SIZE":
+                if "batch_size" in msg:
+                    manager.batch_size = max(1, int(msg["batch_size"]))
                     
     except WebSocketDisconnect:
         active_websockets.remove(websocket)
