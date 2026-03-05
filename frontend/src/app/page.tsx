@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { BarChart3, Activity, Thermometer, Droplets, Zap, FlaskConical, Play } from "lucide-react";
 
 type SimulationState = 'setup' | 'running' | 'finished';
 
@@ -16,6 +18,11 @@ type SimulationData = {
     pH: number;
     temp: number;
     rad: number;
+  };
+  scatter?: {
+    x: number[];
+    y: number[];
+    n: number[];
   };
   feed: {
     enabled: boolean;
@@ -407,134 +414,166 @@ export default function Home() {
   // 実行画面（既存の表示）
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* ヘッダー */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-            SAGA-U 微生物進化シミュレーター
-          </h1>
-          <div className="flex items-center gap-4">
-            <span className="px-3 py-1 rounded-full text-sm bg-green-500/20 text-green-400">
-              ● 実行中
-            </span>
-            {data && (
-              <span className="text-slate-400">
-                Step: {data.step.toLocaleString()}
-              </span>
-            )}
-          </div>
-        </div>
+      <div className="max-w-full">
+        
+        {/* ヘッダー & インラインコントロール・ツールバー */}
+        <header className="flex flex-wrap items-center justify-between gap-6 bg-slate-900/60 p-4 border border-slate-800 rounded-2xl backdrop-blur-md mb-8">
+          <div className="flex items-center gap-6">
+            <h1 className="text-3xl font-black tracking-tighter text-emerald-400 italic shrink-0">
+              Micro-Colosseum
+            </h1>
+            
+            <div className="flex items-center gap-4 border-l border-slate-700 pl-6">
+              {/* 実行ステータスとステップ数 */}
+              <div className="flex items-center gap-3 shrink-0">
+                <span className="flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-bold bg-green-500/10 text-green-400 border border-green-500/20">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                  </span>
+                  実行中
+                </span>
+                {data && (
+                  <span className="text-xs font-mono text-slate-500">
+                    STEP: <span className="text-white">{data.step.toLocaleString()}</span>
+                  </span>
+                )}
+              </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* 左カラム: コントロールパネル */}
-          <div className="lg:col-span-1 space-y-6">
-            {/* 基本コントロール */}
-            <Card className="bg-slate-800/50 border-slate-700">
-              <CardHeader>
-                <CardTitle className="text-white">コントロール</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <Button 
+              {/* インライン・アクションボタン群 */}
+              <div className="flex items-center gap-1 bg-black/20 p-1 rounded-lg">
+              <Button 
                   onClick={handlePauseResume}
-                  className={`w-full ${isPaused ? 'bg-green-600 hover:bg-green-700' : 'bg-yellow-600 hover:bg-yellow-700'}`}
+                  className={`h-8 w-auto px-4 gap-2 transition-all shadow-md font-bold text-[15px] ${
+                    isPaused 
+                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white' 
+                      : 'bg-slate-100 hover:bg-white text-black'
+                  }`}
                 >
-                  {isPaused ? '▶ 再開' : '⏸ 一時停止'}
+                  {isPaused ? (
+                    <>
+                      <Play size={14} fill="currentColor" />
+                      <span>再開</span>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex gap-0.5">
+                        <div className="w-1 h-3.5 bg-current rounded-full"></div>
+                        <div className="w-1 h-3.5 bg-current rounded-full"></div>
+                      </div>
+                      <span>一時停止</span>
+                    </>
+                  )}
                 </Button>
                 <Button
                   onClick={handleStep}
                   disabled={!isPaused}
-                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 disabled:text-slate-400"
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 px-3 text-[15px] text-slate-300 hover:bg-slate-700 disabled:opacity-20"
                 >
-                  ⏭ 1ステップ実行
+                  1ステップ
                 </Button>
                 <Button
                   onClick={handleReset}
-                  variant="outline"
-                  className="w-full border-slate-600 text-slate-300 hover:bg-slate-700"
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 px-3 text-[15px] text-slate-500 hover:text-red-400"
                 >
-                  ↻ 中止して設定に戻る
+                  リセット
                 </Button>
-                <div className="pt-2 border-t border-slate-700 space-y-2">
-                  <Label className="text-slate-300">実行中バッチ数</Label>
-                  <Input
-                    type="number"
-                    step="1"
-                    min="1"
-                    value={envConfig.batch_size}
-                    onChange={(e) => setEnvConfig({...envConfig, batch_size: Number(e.target.value)})}
-                    className="bg-slate-700 border-slate-600 text-white"
-                  />
-                  <Button
-                    onClick={handleSetBatchSize}
-                    className="w-full bg-indigo-600 hover:bg-indigo-700"
-                  >
-                    バッチ数を反映
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* 統計情報 */}
-            {data && (
-              <Card className="bg-slate-800/50 border-slate-700">
-                <CardHeader>
-                  <CardTitle className="text-white">統計</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">総個体数:</span>
-                    <span className="font-mono text-green-400">{data.stats.total_N.toFixed(1)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">株数:</span>
-                    <span className="font-mono text-blue-400">{data.stats.active_strains}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">分裂回数:</span>
-                    <span className="font-mono text-purple-400">{data.stats.division_count}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">HGT回数:</span>
-                    <span className="font-mono text-orange-400">{data.stats.hgt_count}</span>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* 環境状態 */}
-            {data && (
-              <Card className="bg-slate-800/50 border-slate-700">
-                <CardHeader>
-                  <CardTitle className="text-white">環境状態</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">基質 (S):</span>
-                    <span className="font-mono text-yellow-400">{data.env.S.toFixed(1)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">毒素 (T):</span>
-                    <span className="font-mono text-red-400">{data.env.T.toFixed(3)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">pH:</span>
-                    <span className="font-mono text-cyan-400">{data.env.pH.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">温度:</span>
-                    <span className="font-mono text-orange-400">{data.env.temp.toFixed(1)}°C</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">放射線:</span>
-                    <span className="font-mono text-pink-400">{data.env.rad.toFixed(1)}</span>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+              </div>
+            </div>
           </div>
+          {/* 右側：バッチ設定エリア */}
+          <div className="flex items-center gap-3 bg-black/30 p-1 pl-4 mr-[10%] rounded-full border border-slate-800">
+            <Label className="text-[15px] text-slate-500 uppercase tracking-tighter">Batch Size</Label>
+            <Input
+              type="number"
+              min="1"
+              value={envConfig.batch_size}
+              onChange={(e) => setEnvConfig({...envConfig, batch_size: Number(e.target.value)})}
+              className="w-16 bg-transparent border-none text-white text-xs font-mono focus-visible:ring-0 h-8 text-center"
+            />
+            <Button
+              onClick={handleSetBatchSize}
+              className="h-8 px-4 bg-indigo-600 hover:bg-indigo-500 text-[15px] rounded-full"
+            >
+              反映
+            </Button>
+          </div>
+        </header>
+            {/* 統計情報 */}
+            {/* 右側に配置するダッシュボードボタン */}
+            <div className="fixed top-6 right-6 z-50">
+              <Sheet>
+                <SheetTrigger asChild>
+                  <Button variant="outline" className="bg-slate-800 border-slate-700 text-blue-400 hover:bg-slate-700 gap-2 shadow-lg">
+                    <BarChart3 size={18} />
+                    統計・環境データ
+                  </Button>
+                </SheetTrigger>
+                
+                <SheetContent className="bg-slate-900 border-slate-800 text-white sm:max-w-md overflow-y-auto">
+                  <SheetHeader className="border-b border-slate-800 pb-4 mb-6">
+                    <SheetTitle className="text-white flex items-center gap-2">
+                      <Activity className="text-blue-400" /> 
+                      リアルタイム・アナリティクス
+                    </SheetTitle>
+                    <SheetDescription className="text-slate-400 font-mono text-xs">
+                      STEP: {data?.step.toLocaleString()}
+                    </SheetDescription>
+                  </SheetHeader>
 
-          {/* 右カラム: データ表示 */}
-          <div className="lg:col-span-2 space-y-6">
+                  {data ? (
+                    <div className="space-y-8">
+                      {/* 統計情報セクション */}
+                      <section>
+                        <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">Population Stats</h3>
+                        <div className="grid grid-cols-2 gap-3">
+                          {[
+                            { label: "総個体数", val: data.stats.total_N.toFixed(1), color: "text-green-400" },
+                            { label: "アクティブ株", val: data.stats.active_strains, color: "text-blue-400" },
+                            { label: "分裂回数", val: data.stats.division_count, color: "text-purple-400" },
+                            { label: "HGT回数", val: data.stats.hgt_count, color: "text-orange-400" }
+                          ].map((stat) => (
+                            <div key={stat.label} className="bg-slate-950 p-3 rounded-lg border border-slate-800 text-center">
+                              <p className="text-[10px] text-slate-500 mb-1">{stat.label}</p>
+                              <p className={`text-xl font-mono font-bold ${stat.color}`}>{stat.val}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+
+                      {/* 環境状態セクション */}
+                      <section className="space-y-3">
+                        <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">Environment Log</h3>
+                        {[
+                          { label: "基質濃度 (S)", val: data.env.S.toFixed(1), icon: <Droplets className="text-yellow-400" size={16} /> },
+                          { label: "現在温度", val: `${data.env.temp.toFixed(1)}°C`, icon: <Thermometer className="text-orange-400" size={16} /> },
+                          { label: "放射線レベル", val: data.env.rad.toFixed(2), icon: <Zap className="text-pink-400" size={16} /> },
+                          { label: "環境pH", val: data.env.pH.toFixed(2), icon: <FlaskConical className="text-cyan-400" size={16} /> }
+                        ].map((env) => (
+                          <div key={env.label} className="flex justify-between items-center bg-slate-950/50 p-4 rounded-xl border border-slate-800">
+                            <div className="flex items-center gap-3">
+                              {env.icon}
+                              <span className="text-sm font-medium">{env.label}</span>
+                            </div>
+                            <span className="font-mono font-bold text-white">{env.val}</span>
+                          </div>
+                        ))}
+                      </section>
+                    </div>
+                  ) : (
+                    <div className="text-center py-20 text-slate-600 font-mono text-sm animate-pulse">
+                      RECEIVING DATA...
+                    </div>
+                  )}
+                </SheetContent>
+              </Sheet>
+            </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* 株ランキング */}
             {data && data.ranking.length > 0 && (
               <Card className="bg-slate-800/50 border-slate-700">
@@ -588,6 +627,5 @@ export default function Home() {
           </div>
         </div>
       </div>
-    </div>
   );
 }
