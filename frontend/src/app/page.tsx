@@ -186,7 +186,7 @@ export default function Home() {
         <div className="max-w-4xl mx-auto">
           <div className="mb-8">
             <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-              SAGA-U 微生物進化シミュレーター
+              Microverse
             </h1>
             <p className="text-slate-400">初期設定</p>
             <span className={`inline-block mt-2 px-3 py-1 rounded-full text-sm ${isConnected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
@@ -421,7 +421,7 @@ export default function Home() {
         <header className="flex flex-wrap items-center gap-6 bg-slate-900/60 p-4 border border-slate-800 rounded-2xl backdrop-blur-md mb-8">
           <div className="flex items-center gap-6">
             <h1 className="text-3xl font-black tracking-tighter text-emerald-400 italic shrink-0">
-              Micro-Colosseum
+              Microverse
             </h1>
             
             <div className="flex items-center gap-4 border-l border-slate-700 pl-6">
