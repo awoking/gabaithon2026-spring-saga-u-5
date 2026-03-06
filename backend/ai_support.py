@@ -1,10 +1,10 @@
 import json
 import os
-import urllib.error
-import urllib.request
+import asyncio
 from urllib.parse import urlparse
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+import httpx
 
 try:
     import psycopg
@@ -14,6 +14,11 @@ except Exception:
     psycopg = None
     register_vector = None
     Vector = None
+
+try:
+    from psycopg_pool import ConnectionPool
+except Exception:
+    ConnectionPool = None
 
 
 def _clean_env(name: str, default: str = "") -> str:
@@ -47,26 +52,22 @@ class AzureOpenAIClient:
     def configured(self) -> bool:
         return bool(self.endpoint and self.api_key and self.embedding_deployment and self.chat_deployment)
 
-    def _post(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        req = urllib.request.Request(
-            url=url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "api-key": self.api_key,
-            },
-            method="POST",
-        )
+    async def _post(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": self.api_key,
+        }
         try:
-            with urllib.request.urlopen(req, timeout=60) as res:
-                return json.loads(res.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"Azure OpenAI HTTPError: {e.code} {detail}") from e
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                res = await client.post(url, json=payload, headers=headers)
+                res.raise_for_status()
+                return res.json()
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"Azure OpenAI HTTPError: {e.response.status_code} {e.response.text}") from e
         except Exception as e:
             raise RuntimeError(f"Azure OpenAI request failed: {e}") from e
 
-    def embed_text(self, text: str) -> List[float]:
+    async def embed_text(self, text: str) -> List[float]:
         url = (
             f"{self.endpoint}/openai/deployments/{self.embedding_deployment}/embeddings"
             f"?api-version={self.api_version}"
@@ -75,10 +76,10 @@ class AzureOpenAIClient:
             "input": text,
             "model": "text-embedding-3-small",
         }
-        data = self._post(url, payload)
+        data = await self._post(url, payload)
         return data["data"][0]["embedding"]
 
-    def chat_similarity_and_solution(self, current_summary: str, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def chat_similarity_and_solution(self, current_summary: str, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         url = (
             f"{self.endpoint}/openai/deployments/{self.chat_deployment}/chat/completions"
             f"?api-version={self.api_version}"
@@ -103,7 +104,7 @@ class AzureOpenAIClient:
                 {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
             ],
         }
-        data = self._post(url, payload)
+        data = await self._post(url, payload)
         content = data["choices"][0]["message"]["content"]
 
         try:
@@ -131,6 +132,7 @@ class SupabaseVectorStore:
     def __init__(self):
         self.db_url = _clean_env("SUPABASE_DB_URL", "")
         self.azure = AzureOpenAIClient()
+        self.pool = None
         self.enabled = bool(self.db_url and self.azure.configured and psycopg is not None and register_vector is not None and Vector is not None)
         self._init_error: Optional[str] = None
 
@@ -140,18 +142,37 @@ class SupabaseVectorStore:
         if self.enabled:
             try:
                 self._init_db()
+                if ConnectionPool is not None:
+                    self.pool = ConnectionPool(self.db_url, min_size=1, max_size=10)
             except Exception as e:
                 self.enabled = False
                 self._init_error = str(e)
 
     def _connect(self, register: bool = True):
-        conn = psycopg.connect(self.db_url)
-        if register and register_vector is not None:
-            register_vector(conn)
-        return conn
+        if self.pool is not None:
+            conn = self.pool.getconn()
+        else:
+            conn = psycopg.connect(self.db_url)
+        try:
+            if register and register_vector is not None:
+                register_vector(conn)
+            return conn
+        except Exception:
+            if self.pool is not None:
+                self.pool.putconn(conn)
+            else:
+                conn.close()
+            raise
+
+    def _release(self, conn):
+        if self.pool is not None:
+            self.pool.putconn(conn)
+        else:
+            conn.close()
 
     def _init_db(self):
-        with self._connect(register=False) as conn:
+        conn = self._connect(register=False)
+        try:
             with conn.cursor() as cur:
                 cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
             conn.commit()
@@ -179,6 +200,8 @@ class SupabaseVectorStore:
                     """
                 )
             conn.commit()
+        finally:
+            self._release(conn)
 
     def _make_case_text(self, before_snapshot: Dict[str, Any], after_snapshot: Dict[str, Any], action: Optional[Dict[str, Any]]) -> str:
         b_env = before_snapshot.get("env", {})
@@ -195,14 +218,9 @@ class SupabaseVectorStore:
             f"total_N={a_stats.get('total_N')} active={a_stats.get('active_strains')}"
         )
 
-    def ingest_case(self, before_snapshot: Dict[str, Any], after_snapshot: Dict[str, Any], action: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        if not self.enabled:
-            return {"ok": False, "error": self._init_error or "AI store is not configured"}
-
-        case_text = self._make_case_text(before_snapshot, after_snapshot, action)
-        embedding = self.azure.embed_text(case_text)
-
-        with self._connect() as conn:
+    def _insert_case_sync(self, case_text: str, before_snapshot: Dict[str, Any], after_snapshot: Dict[str, Any], action: Optional[Dict[str, Any]], embedding: List[float]) -> Dict[str, Any]:
+        conn = self._connect()
+        try:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -220,22 +238,25 @@ class SupabaseVectorStore:
                 )
                 row = cur.fetchone()
             conn.commit()
+            return {
+                "ok": True,
+                "case_id": int(row[0]),
+                "stored_at": datetime.utcnow().isoformat(),
+            }
+        finally:
+            self._release(conn)
 
-        return {
-            "ok": True,
-            "case_id": int(row[0]),
-            "stored_at": datetime.utcnow().isoformat(),
-        }
-
-    def retrieve_similar(self, current_snapshot: Dict[str, Any], top_k: int = 8) -> Dict[str, Any]:
+    async def ingest_case(self, before_snapshot: Dict[str, Any], after_snapshot: Dict[str, Any], action: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self.enabled:
             return {"ok": False, "error": self._init_error or "AI store is not configured"}
 
-        current_text = self._make_case_text(current_snapshot, current_snapshot, None)
-        query_embedding = self.azure.embed_text(current_text)
-        query_vector = Vector(query_embedding)
+        case_text = self._make_case_text(before_snapshot, after_snapshot, action)
+        embedding = await self.azure.embed_text(case_text)
+        return await asyncio.to_thread(self._insert_case_sync, case_text, before_snapshot, after_snapshot, action, embedding)
 
-        with self._connect() as conn:
+    def _fetch_candidates_sync(self, query_vector: Any, top_k: int) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        try:
             with conn.cursor() as cur:
                 cur.execute("SET LOCAL ivfflat.probes = 100")
                 cur.execute(
@@ -246,7 +267,7 @@ class SupabaseVectorStore:
                     ORDER BY embedding <=> %s
                     LIMIT %s
                     """,
-                          (query_vector, query_vector, max(1, top_k)),
+                    (query_vector, query_vector, max(1, top_k)),
                 )
                 rows = cur.fetchall()
 
@@ -263,20 +284,32 @@ class SupabaseVectorStore:
                     )
                     rows = cur.fetchall()
 
-        candidates = []
-        for row in rows:
-            candidates.append(
-                {
-                    "id": int(row[0]),
-                    "case_text": row[1],
-                    "before": row[2],
-                    "after": row[3],
-                    "action": row[4],
-                    "cosine_similarity": float(row[5]),
-                }
-            )
+            candidates = []
+            for row in rows:
+                candidates.append(
+                    {
+                        "id": int(row[0]),
+                        "case_text": row[1],
+                        "before": row[2],
+                        "after": row[3],
+                        "action": row[4],
+                        "cosine_similarity": float(row[5]),
+                    }
+                )
+            return candidates
+        finally:
+            self._release(conn)
 
-        recommendation = self.azure.chat_similarity_and_solution(current_text, candidates)
+    async def retrieve_similar(self, current_snapshot: Dict[str, Any], top_k: int = 8) -> Dict[str, Any]:
+        if not self.enabled:
+            return {"ok": False, "error": self._init_error or "AI store is not configured"}
+
+        current_text = self._make_case_text(current_snapshot, current_snapshot, None)
+        query_embedding = await self.azure.embed_text(current_text)
+        query_vector = Vector(query_embedding)
+
+        candidates = await asyncio.to_thread(self._fetch_candidates_sync, query_vector, top_k)
+        recommendation = await self.azure.chat_similarity_and_solution(current_text, candidates)
         return {
             "ok": True,
             "retrieved": len(candidates),

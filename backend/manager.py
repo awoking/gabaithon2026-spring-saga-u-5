@@ -36,6 +36,33 @@ class SimulationManager:
     def _active_indices(self):
         return np.where(self.engine.active_mask)[0]
 
+    def _build_scatter(self, active_idx):
+        if len(active_idx) == 0:
+            return {"x": [], "y": [], "n": []}
+
+        trait_p = self.engine.traits[active_idx, 2]
+        trait_r = self.engine.traits[active_idx, 3]
+        counts = self.engine.N[active_idx]
+
+        p_min, p_max = float(np.min(trait_p)), float(np.max(trait_p))
+        r_min, r_max = float(np.min(trait_r)), float(np.max(trait_r))
+
+        if p_max - p_min < 1e-12:
+            x = np.full(len(active_idx), 0.5, dtype=np.float64)
+        else:
+            x = 0.1 + 0.8 * ((trait_p - p_min) / (p_max - p_min))
+
+        if r_max - r_min < 1e-12:
+            y = np.full(len(active_idx), 0.5, dtype=np.float64)
+        else:
+            y = 0.1 + 0.8 * ((trait_r - r_min) / (r_max - r_min))
+
+        return {
+            "x": x.tolist(),
+            "y": y.tolist(),
+            "n": counts.tolist(),
+        }
+
     def apply_nutrient_feed(self):
         if not self.auto_feed_enabled:
             return
@@ -167,6 +194,7 @@ class SimulationManager:
                 "per_batch": float(self.feed_per_batch),
                 "max_s": float(self.feed_max_s)
             },
+            "scatter": self._build_scatter(active_idx),
             "ranking": ranking,
             "pool": {
                 "plasmids": self.engine.plasmid_pool.tolist(),

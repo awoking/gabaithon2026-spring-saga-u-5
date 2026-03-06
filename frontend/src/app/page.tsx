@@ -338,7 +338,8 @@ export default function Home() {
 
   // WebSocket接続
   useEffect(() => {
-    const ws = new WebSocket("ws://localhost:8000/ws");
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws";
+    const ws = new WebSocket(wsUrl);
     
     ws.onopen = () => {
       console.log("WebSocket connected");

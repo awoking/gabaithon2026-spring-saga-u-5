@@ -3,4 +3,6 @@ uvicorn
 numpy
 numba
 psycopg[binary]
+psycopg-pool
 pgvector
+httpx
