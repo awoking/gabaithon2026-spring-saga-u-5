@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Activity, Thermometer, Droplets, Zap, FlaskConical, Play } from "lucide-react";
 import { ColosseumChamber } from "@/components/ColosseumChamber";
+import Image from "next/image";
 
 type SimulationState = 'setup' | 'running' | 'finished';
 
@@ -175,7 +176,7 @@ export default function Home() {
   const [lineageError, setLineageError] = useState<string | null>(null);
   const [isLineageLoading, setIsLineageLoading] = useState(false);
   const [selectedLineageId, setSelectedLineageId] = useState<number | null>(null);
-  const [showLineagePanel, setShowLineagePanel] = useState(true);
+  const [showLineagePanel, setShowLineagePanel] = useState(false);
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const isRunningRef = useRef(false);
@@ -677,7 +678,7 @@ export default function Home() {
           <div className="mb-8 flex items-start justify-between gap-4">
             <div>
               <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-                SAGA-U 微生物進化シミュレーター
+                Microverse
               </h1>
               <p className="text-slate-400">初期設定</p>
               <span className={`inline-block mt-2 px-3 py-1 rounded-full text-sm ${isConnected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
@@ -1024,27 +1025,38 @@ export default function Home() {
             </Card>
           </div>
           )}
+          <div className="flex flex-col items-center mt-12 mb-20">
+            <div className="relative w-80 h-80 mb-10 animate-bounce-slow z-10 drop-shadow-[0_0_15px_rgba(52,211,153,0.5)]">
+                <Image
+                  src="/assets/sprite/sprite-5-twin.gif"
+                  alt="bacteria mascot"
+                  fill
+                  className="object-contain"
+                  unoptimized
+                />
+            </div>
 
-          <div className="flex justify-center">
-            <Button
-              onClick={handleStart}
-              disabled={!isConnected}
-              className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-12 py-6 text-lg font-bold"
-            >
-              🚀 シミュレーション開始
-            </Button>
+            <div className="flex justify-center">
+              <Button
+                onClick={handleStart}
+                disabled={!isConnected}
+                className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-12 py-6 text-lg font-bold"
+              >
+                🚀 シミュレーション開始
+              </Button>
+            </div>
+
+            {!isConnected && (
+              <Card className="bg-slate-800/50 border-slate-700 mt-6">
+                <CardContent className="p-6 text-center">
+                  <div className="text-red-400 mb-2">⚠ バックエンドサーバーが起動していません</div>
+                  <code className="text-sm text-slate-400 block bg-slate-900 p-3 rounded">
+                    cd backend && python main.py
+                  </code>
+                </CardContent>
+              </Card>
+            )}
           </div>
-
-          {!isConnected && (
-            <Card className="bg-slate-800/50 border-slate-700 mt-6">
-              <CardContent className="p-6 text-center">
-                <div className="text-red-400 mb-2">⚠ バックエンドサーバーが起動していません</div>
-                <code className="text-sm text-slate-400 block bg-slate-900 p-3 rounded">
-                  cd backend && python main.py
-                </code>
-              </CardContent>
-            </Card>
-          )}
         </div>
       </div>
     );
@@ -1073,35 +1085,35 @@ export default function Home() {
                   <div className="bg-slate-900/50 p-4 rounded">
                     <div className="text-slate-400 mb-1">最終統計</div>
                     <div className="space-y-1">
-                      <div>分裂回数: <span className="font-mono text-purple-400">{data.stats.division_count}</span></div>
-                      <div>HGT回数: <span className="font-mono text-orange-400">{data.stats.hgt_count}</span></div>
-                      <div>最高総個体数: <span className="font-mono text-green-300">{peakTotalN ? peakTotalN.value.toFixed(1) : "-"}</span></div>
-                      <div>最高到達STEP: <span className="font-mono text-white">{peakTotalN ? peakTotalN.step.toLocaleString() : "-"}</span></div>
+                      <div className="text-slate-400">分裂回数: <span className="font-mono text-purple-400">{data.stats.division_count}</span></div>
+                      <div className="text-slate-400">HGT回数: <span className="font-mono text-orange-400">{data.stats.hgt_count}</span></div>
+                      <div className="text-slate-400">最高総個体数: <span className="font-mono text-green-300">{peakTotalN ? peakTotalN.value.toFixed(1) : "-"}</span></div>
+                      <div className="text-slate-400">最高到達STEP: <span className="font-mono text-white">{peakTotalN ? peakTotalN.step.toLocaleString() : "-"}</span></div>
                     </div>
                   </div>
                   <div className="bg-slate-900/50 p-4 rounded">
                     <div className="text-slate-400 mb-1">直前の環境パラメーター</div>
                     <div className="space-y-1">
-                      <div>基質 S: <span className="font-mono text-yellow-400">{lastPreExtinctionEnv ? lastPreExtinctionEnv.S.toFixed(1) : "-"}</span></div>
-                      <div>毒素 T: <span className="font-mono text-white">{lastPreExtinctionEnv ? lastPreExtinctionEnv.T.toFixed(2) : "-"}</span></div>
-                      <div>環境 pH: <span className="font-mono text-cyan-400">{lastPreExtinctionEnv ? lastPreExtinctionEnv.pH.toFixed(2) : "-"}</span></div>
-                      <div>温度 temp: <span className="font-mono text-orange-300">{lastPreExtinctionEnv ? lastPreExtinctionEnv.temp.toFixed(1) : "-"}</span></div>
-                      <div>放射線 rad: <span className="font-mono text-pink-300">{lastPreExtinctionEnv ? lastPreExtinctionEnv.rad.toFixed(2) : "-"}</span></div>
+                      <div className="text-slate-400">基質 S: <span className="font-mono text-yellow-400">{lastPreExtinctionEnv ? lastPreExtinctionEnv.S.toFixed(1) : "-"}</span></div>
+                      <div className="text-slate-400">毒素 T: <span className="font-mono text-white">{lastPreExtinctionEnv ? lastPreExtinctionEnv.T.toFixed(2) : "-"}</span></div>
+                      <div className="text-slate-400">環境 pH: <span className="font-mono text-cyan-400">{lastPreExtinctionEnv ? lastPreExtinctionEnv.pH.toFixed(2) : "-"}</span></div>
+                      <div className="text-slate-400">温度 temp: <span className="font-mono text-orange-300">{lastPreExtinctionEnv ? lastPreExtinctionEnv.temp.toFixed(1) : "-"}</span></div>
+                      <div className="text-slate-400">放射線 rad: <span className="font-mono text-pink-300">{lastPreExtinctionEnv ? lastPreExtinctionEnv.rad.toFixed(2) : "-"}</span></div>
                     </div>
                   </div>
                   <div className="bg-slate-900/50 p-4 rounded md:col-span-2">
                     <div className="text-slate-400 mb-1">最後に残った株の詳細データ</div>
                     {lastSurvivor ? (
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                        <div>ID: <span className="font-mono text-blue-400">#{lastSurvivor.id}</span></div>
-                        <div>個体数 N: <span className="font-mono text-green-300">{lastSurvivor.N.toFixed(2)}</span></div>
-                        <div>μ_max: <span className="font-mono text-purple-300">{lastSurvivor.mu_max.toFixed(3)}</span></div>
-                        <div>Ks: <span className="font-mono text-cyan-300">{lastSurvivor.Ks.toFixed(3)}</span></div>
-                        <div>p: <span className="font-mono text-white">{lastSurvivor.p.toFixed(3)}</span></div>
-                        <div>r: <span className="font-mono text-white">{lastSurvivor.r.toFixed(3)}</span></div>
-                        <div>T_opt: <span className="font-mono text-orange-300">{lastSurvivor.T_opt.toFixed(2)}</span></div>
-                        <div>pH_opt: <span className="font-mono text-cyan-300">{lastSurvivor.pH_opt.toFixed(2)}</span></div>
-                        <div>Rad_res: <span className="font-mono text-pink-300">{lastSurvivor.Rad_res.toFixed(3)}</span></div>
+                        <div className="text-slate-400">ID: <span className="font-mono text-blue-400">#{lastSurvivor.id}</span></div>
+                        <div className="text-slate-400">個体数 N: <span className="font-mono text-green-300">{lastSurvivor.N.toFixed(2)}</span></div>
+                        <div className="text-slate-400">μ_max: <span className="font-mono text-purple-300">{lastSurvivor.mu_max.toFixed(3)}</span></div>
+                        <div className="text-slate-400">Ks: <span className="font-mono text-cyan-300">{lastSurvivor.Ks.toFixed(3)}</span></div>
+                        <div className="text-slate-400">p: <span className="font-mono text-white">{lastSurvivor.p.toFixed(3)}</span></div>
+                        <div className="text-slate-400">r: <span className="font-mono text-white">{lastSurvivor.r.toFixed(3)}</span></div>
+                        <div className="text-slate-400">T_opt: <span className="font-mono text-orange-300">{lastSurvivor.T_opt.toFixed(2)}</span></div>
+                        <div className="text-slate-400">pH_opt: <span className="font-mono text-cyan-300">{lastSurvivor.pH_opt.toFixed(2)}</span></div>
+                        <div className="text-slate-400">Rad_res: <span className="font-mono text-pink-300">{lastSurvivor.Rad_res.toFixed(3)}</span></div>
                       </div>
                     ) : (
                       <div className="text-slate-500 text-xs">生存株データが取得できませんでした。</div>
@@ -1134,7 +1146,7 @@ export default function Home() {
         <header className="flex flex-wrap items-center gap-6 bg-slate-900/60 p-4 border border-slate-800 rounded-2xl backdrop-blur-md mb-8">
           <div className="flex items-center gap-6">
             <h1 className="text-3xl font-black tracking-tighter text-emerald-400 italic shrink-0">
-              Micro-Colosseum
+              Microverse
             </h1>
             
             <div className="flex items-center gap-4 border-l border-slate-700 pl-6">
@@ -1300,24 +1312,36 @@ export default function Home() {
             <div className="lg:col-span-1">
               <Card className="bg-slate-800/50 border-slate-700">
                 <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant={leftPanelTab === "ranking" ? "default" : "outline"}
-                      onClick={() => setLeftPanelTab("ranking")}
-                      className={leftPanelTab === "ranking" ? "h-7 px-2 text-xs" : "h-7 px-2 text-xs border-slate-600 text-slate-300"}
-                    >
-                      ランキング
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={leftPanelTab === "env" ? "default" : "outline"}
-                      onClick={() => setLeftPanelTab("env")}
-                      className={leftPanelTab === "env" ? "h-7 px-2 text-xs" : "h-7 px-2 text-xs border-slate-600 text-slate-300"}
-                    >
-                      変更と監視
-                    </Button>
-                  </div>
+                <div className="grid grid-cols-2 gap-1 bg-slate-950 p-1 rounded-md border border-slate-800 w-full">
+                  {/* ランキングボタン */}
+                  <Button
+                    size="sm"
+                    variant={leftPanelTab === "ranking" ? "default" : "outline"}
+                    onClick={() => setLeftPanelTab("ranking")}
+                    className={
+                      leftPanelTab === "ranking" 
+                        ? "h-8 w-full bg-white text-black font-bold hover:bg-white" // w-fullを追加
+                        : "h-8 w-full bg-transparent text-slate-400 border-none hover:text-white hover:bg-slate-800"
+                    }
+                  >
+                    ランキング
+                  </Button>
+
+                  {/* 変更と監視ボタン */}
+                  <Button
+                    size="sm"
+                    variant={leftPanelTab === "env" ? "default" : "outline"}
+                    onClick={() => setLeftPanelTab("env")}
+                    className={
+                      leftPanelTab === "env" 
+                        ? "h-8 w-full bg-white text-black font-bold hover:bg-white" // w-fullを追加
+                        : "h-8 w-full bg-transparent text-slate-400 border-none hover:text-white hover:bg-slate-800"
+                    }
+                  >
+                    変更と監視
+                  </Button>
+                </div>
+                    
                 </CardHeader>
                 <CardContent>
                   {leftPanelTab === "ranking" ? (
@@ -1384,31 +1408,31 @@ export default function Home() {
                         <div className="grid grid-cols-1 gap-2">
                           <div className="rounded border border-slate-700 p-2 space-y-1">
                             <div className="text-[11px] text-slate-300">基質濃度 <span className="text-slate-500">(SET_RUNTIME_PARAMS.S)</span></div>
-                            <Input type="number" step="1" value={runtimeEnvConfig?.S ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, S: Number(e.target.value) } : prev)} placeholder="例: 500" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                            <Input type="number" step="1" value={runtimeEnvConfig?.S ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, S: Number(e.target.value) } : prev)} placeholder="例: 500" className="h-8 bg-slate-800 border-slate-700 text-xs text-slate-400" />
                           </div>
                           <div className="rounded border border-slate-700 p-2 space-y-1">
                             <div className="text-[11px] text-slate-300">毒素濃度 <span className="text-slate-500">(SET_RUNTIME_PARAMS.T)</span></div>
-                            <Input type="number" step="0.1" value={runtimeEnvConfig?.T ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, T: Number(e.target.value) } : prev)} placeholder="例: 0.0" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                            <Input type="number" step="0.1" value={runtimeEnvConfig?.T ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, T: Number(e.target.value) } : prev)} placeholder="例: 0.0" className="h-8 bg-slate-800 border-slate-700 text-xs text-slate-400" />
                           </div>
                           <div className="rounded border border-slate-700 p-2 space-y-1">
                             <div className="text-[11px] text-slate-300">環境pH <span className="text-slate-500">(SET_RUNTIME_PARAMS.pH)</span></div>
-                            <Input type="number" step="0.1" value={runtimeEnvConfig?.pH ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, pH: Number(e.target.value) } : prev)} placeholder="例: 7.0" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                            <Input type="number" step="0.1" value={runtimeEnvConfig?.pH ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, pH: Number(e.target.value) } : prev)} placeholder="例: 7.0" className="h-8 bg-slate-800 border-slate-700 text-xs text-slate-400" />
                           </div>
                           <div className="rounded border border-slate-700 p-2 space-y-1">
                             <div className="text-[11px] text-slate-300">環境温度(℃) <span className="text-slate-500">(SET_ENV.temp)</span></div>
-                            <Input type="number" step="0.1" value={runtimeEnvConfig?.temp ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, temp: Number(e.target.value) } : prev)} placeholder="例: 25.0" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                            <Input type="number" step="0.1" value={runtimeEnvConfig?.temp ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, temp: Number(e.target.value) } : prev)} placeholder="例: 25.0" className="h-8 bg-slate-800 border-slate-700 text-xs text-slate-400" />
                           </div>
                           <div className="rounded border border-slate-700 p-2 space-y-1">
                             <div className="text-[11px] text-slate-300">放射線レベル <span className="text-slate-500">(SET_ENV.rad)</span></div>
-                            <Input type="number" step="0.1" value={runtimeEnvConfig?.rad ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, rad: Number(e.target.value) } : prev)} placeholder="例: 0.0" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                            <Input type="number" step="0.1" value={runtimeEnvConfig?.rad ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, rad: Number(e.target.value) } : prev)} placeholder="例: 0.0" className="h-8 bg-slate-800 border-slate-700 text-xs text-slate-400" />
                           </div>
                           <div className="rounded border border-slate-700 p-2 space-y-1">
                             <div className="text-[11px] text-slate-300">希釈率 <span className="text-slate-500">(SET_RUNTIME_PARAMS.D)</span></div>
-                            <Input type="number" step="0.01" value={runtimeEnvConfig?.D ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, D: Number(e.target.value) } : prev)} placeholder="例: 0.01" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                            <Input type="number" step="0.01" value={runtimeEnvConfig?.D ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, D: Number(e.target.value) } : prev)} placeholder="例: 0.01" className="h-8 bg-slate-800 border-slate-700 text-xs text-slate-400" />
                           </div>
                           <div className="rounded border border-slate-700 p-2 space-y-1">
                             <div className="text-[11px] text-slate-300">流入基質濃度 <span className="text-slate-500">(SET_RUNTIME_PARAMS.S_in)</span></div>
-                            <Input type="number" step="1" value={runtimeEnvConfig?.S_in ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, S_in: Number(e.target.value) } : prev)} placeholder="例: 120" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                            <Input type="number" step="1" value={runtimeEnvConfig?.S_in ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, S_in: Number(e.target.value) } : prev)} placeholder="例: 120" className="h-8 bg-slate-800 border-slate-700 text-xs text-slate-400" />
                           </div>
                         </div>
                         <Button size="sm" onClick={handleApplyRuntimeEnv} disabled={!runtimeEnvConfig} className="h-7 px-2 text-xs bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 w-full">
@@ -1420,41 +1444,8 @@ export default function Home() {
                 </CardContent>
               </Card>
             </div>
-            <div className="lg:col-span-3 space-y-4">
+            <div className="lg:col-span-3">
               <ColosseumChamber data={data} />
-              <Card className="bg-slate-800/50 border-slate-700">
-                <CardHeader>
-                  <CardTitle className="text-white text-sm">scatter データ</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {data?.scatter && data.scatter.x.length > 0 ? (
-                    <div className="max-h-56 overflow-auto rounded border border-slate-700">
-                      <table className="w-full text-xs font-mono">
-                        <thead className="sticky top-0 bg-slate-900 border-b border-slate-700 text-slate-400">
-                          <tr>
-                            <th className="text-left p-2">index</th>
-                            <th className="text-right p-2">x</th>
-                            <th className="text-right p-2">y</th>
-                            <th className="text-right p-2">n</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {data.scatter.x.map((xValue, index) => (
-                            <tr key={`scatter-${index}`} className="border-b border-slate-700/50">
-                              <td className="p-2 text-slate-300">{index}</td>
-                              <td className="p-2 text-right text-cyan-300">{Number(xValue).toFixed(4)}</td>
-                              <td className="p-2 text-right text-violet-300">{Number(data.scatter?.y?.[index] ?? 0).toFixed(4)}</td>
-                              <td className="p-2 text-right text-emerald-300">{Number(data.scatter?.n?.[index] ?? 0).toFixed(2)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="text-sm text-slate-400">scatter データ待機中です。</div>
-                  )}
-                </CardContent>
-              </Card>
             </div>
             <div className="lg:col-span-1">
               <Card className="bg-slate-800/50 border-slate-700 h-full">
