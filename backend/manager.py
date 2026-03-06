@@ -36,6 +36,33 @@ class SimulationManager:
     def _active_indices(self):
         return np.where(self.engine.active_mask)[0]
 
+    def _run_batch_step_sync(self, dt: float, batch_size: int):
+        res_N, res_S, res_T, res_pH, extinct = compute_batch_kernel(
+            self.engine.N, self.engine.traits, self.engine.m_costs, self.engine.active_mask,
+            self.S, self.T, self.pH, self.env_params,
+            self.engine.plasmid_pool, self.engine.pool_conc, dt, batch_size
+        )
+
+        self.engine.N, self.S, self.T, self.pH = res_N, res_S, res_T, res_pH
+        self.engine.total_steps += batch_size
+
+        self.apply_nutrient_feed()
+        self.engine.reap()
+
+        div_count = self.engine.division_trigger(threshold=self.division_threshold)
+        self.division_count += div_count
+
+        self.engine.refresh_env_pool()
+        hgt_count = self.run_hgt_events(dt=dt, batch_size=batch_size)
+
+        if np.random.rand() < 0.3:
+            active = np.where(self.engine.active_mask)[0]
+            if len(active) > 0:
+                parent_idx = np.random.choice(active)
+                self.engine.spawn(parent_idx=parent_idx, birth_event="mutation")
+
+        return div_count, hgt_count, extinct
+
     def _build_scatter(self, active_idx):
         if len(active_idx) == 0:
             return {"x": [], "y": [], "n": []}
@@ -115,40 +142,7 @@ class SimulationManager:
             return
 
         dt = self.choose_adaptive_dt()
-        # JITカーネル実行（RK4）
-        res_N, res_S, res_T, res_pH, extinct = compute_batch_kernel(
-            self.engine.N, self.engine.traits, self.engine.m_costs, self.engine.active_mask,
-            self.S, self.T, self.pH, self.env_params,
-            self.engine.plasmid_pool, self.engine.pool_conc, dt, batch_size
-        )
-
-        self.engine.N, self.S, self.T, self.pH = res_N, res_S, res_T, res_pH
-        self.engine.total_steps += batch_size
-
-        # 旧来の離散補給（必要な場合のみ）
-        self.apply_nutrient_feed()
-
-        # 絶滅処理
-        self.engine.reap()
-
-        # 分裂処理
-        div_count = self.engine.division_trigger(threshold=self.division_threshold)
-        self.division_count += div_count
-
-        # プール更新
-        self.engine.refresh_env_pool()
-
-        # 水平伝播（HGT）処理
-        hgt_count = self.run_hgt_events(dt=dt, batch_size=batch_size)
-
-        # ========== LAYER 2b: 離散的な新系統誕生（突然変異ガチャ）==========
-        # 1万ステップごとに、確率的に「新しい形質」を持つ新株を生成
-        # これが「種としての分岐」であり、進化シミュレーションの本質
-        if np.random.rand() < 0.3:
-            active = np.where(self.engine.active_mask)[0]
-            if len(active) > 0:
-                parent_idx = np.random.choice(active)
-                self.engine.spawn(parent_idx=parent_idx, birth_event="mutation")  # spawn() は自動的に突然変異を加える
+        div_count, hgt_count, extinct = await asyncio.to_thread(self._run_batch_step_sync, dt, batch_size)
 
         logger.info(f"Step: {self.engine.total_steps:,} | Strains: {np.sum(self.engine.active_mask)} | "
                    f"S: {self.S:.3f} | dt: {dt:.4f} | D: {self.env_params[8]:.3f} | Div: {div_count} | HGT: {hgt_count}")
