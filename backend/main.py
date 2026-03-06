@@ -1,10 +1,13 @@
 import json
 import logging
 import asyncio
-from typing import Any, Dict
-from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional, Union, Literal, Annotated
+from uuid import uuid4
+from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, ValidationError, ConfigDict, TypeAdapter
 from engine import SimulationEngine
 from manager import SimulationManager
 from ai_support import ai_vector_store
@@ -13,316 +16,440 @@ import numpy as np
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
 
-engine = None
-manager = None
-active_websockets = []
-step_requested = False
+class WSBaseModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
 
 
-def _to_float(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
+class InitialStrainConfig(WSBaseModel):
+    mu_max: float = 0.4
+    Ks: float = 1.0
+    N0: float = 500.0
+    p: float = 0.0
+    r: float = 0.0
+    T_opt: float = 25.0
+    pH_opt: float = 7.0
+    Rad_res: float = 0.0
 
 
-def _to_int(value: Any, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+class EnvironmentConfig(WSBaseModel):
+    S0: float = 500.0
+    T0: float = 0.0
+    pH0: float = 7.0
+    temp: float = 25.0
+    rad: float = 0.0
+    k_tox: float = 1.0
+    k_rad: float = 1.0
+    k_acid: float = 0.0
+    Y: float = 100.0
+    d_T: float = 0.1
+    hgt_prob: float = 0.005
+    D: float = 0.0
+    S_in: float = 0.0
+    auto_feed_enabled: bool = True
+    feed_per_batch: float = 200.0
+    feed_max_s: float = 10000.0
+    batch_size: int = 100
+    max_rel_change_per_step: float = 0.05
+    max_abs_s_change_per_step: float = 0.05
+    k_hgt: float = 1e-9
+    division_threshold: float = 5000.0
 
-def initialize_simulation():
-    """シミュレーションを初期化"""
-    global engine, manager
-    engine = SimulationEngine()
-    manager = SimulationManager(engine)
-    logger.info("Simulation initialized")
 
-# 初期化
-initialize_simulation()
+class StartMessage(WSBaseModel):
+    type: Literal["START"]
+    initial_strain: InitialStrainConfig = Field(default_factory=InitialStrainConfig)
+    environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
 
 
-def apply_initial_strain_config(strain_config: Dict[str, Any]):
-    idx_candidates = np.where(engine.active_mask)[0]
+class ResetMessage(WSBaseModel):
+    type: Literal["RESET"]
+
+
+class ResumeMessage(WSBaseModel):
+    type: Literal["RESUME"]
+
+
+class PauseMessage(WSBaseModel):
+    type: Literal["PAUSE"]
+
+
+class StepMessage(WSBaseModel):
+    type: Literal["STEP"]
+
+
+class SetEnvMessage(WSBaseModel):
+    type: Literal["SET_ENV"]
+    temp: Optional[float] = None
+    rad: Optional[float] = None
+
+
+class SetFlowMessage(WSBaseModel):
+    type: Literal["SET_FLOW"]
+    D: Optional[float] = None
+    S_in: Optional[float] = None
+
+
+class SetAdaptiveDtMessage(WSBaseModel):
+    type: Literal["SET_ADAPTIVE_DT"]
+    enabled: Optional[bool] = None
+    dt_min: Optional[float] = None
+    dt_max: Optional[float] = None
+
+
+class SetFeedMessage(WSBaseModel):
+    type: Literal["SET_FEED"]
+    enabled: Optional[bool] = None
+    per_batch: Optional[float] = None
+    max_s: Optional[float] = None
+
+
+class SetBatchSizeMessage(WSBaseModel):
+    type: Literal["SET_BATCH_SIZE"]
+    batch_size: int
+
+
+class SetDivisionMessage(WSBaseModel):
+    type: Literal["SET_DIVISION"]
+    threshold: float
+
+
+class SetRuntimeParamsMessage(WSBaseModel):
+    type: Literal["SET_RUNTIME_PARAMS"]
+    S: Optional[float] = None
+    T: Optional[float] = None
+    pH: Optional[float] = None
+    k_tox: Optional[float] = None
+    k_rad: Optional[float] = None
+    k_acid: Optional[float] = None
+    d_T: Optional[float] = None
+    hgt_prob: Optional[float] = None
+    D: Optional[float] = None
+    S_in: Optional[float] = None
+    max_rel_change_per_step: Optional[float] = None
+    max_abs_s_change_per_step: Optional[float] = None
+    k_hgt: Optional[float] = None
+    division_threshold: Optional[float] = None
+
+
+class GetLineageMessage(WSBaseModel):
+    type: Literal["GET_LINEAGE"]
+    strain_id: int
+    max_depth: int = 200
+
+
+class AIIngestCaseMessage(WSBaseModel):
+    type: Literal["AI_INGEST_CASE"]
+    before_snapshot: Dict[str, Any]
+    after_snapshot: Dict[str, Any]
+    action: Optional[Dict[str, Any]] = None
+
+
+class AISupportRequestMessage(WSBaseModel):
+    type: Literal["AI_SUPPORT_REQUEST"]
+    current_snapshot: Optional[Dict[str, Any]] = None
+    top_k: int = 8
+
+
+InboundMessage = Annotated[
+    Union[
+        StartMessage,
+        ResetMessage,
+        ResumeMessage,
+        PauseMessage,
+        StepMessage,
+        SetEnvMessage,
+        SetFlowMessage,
+        SetAdaptiveDtMessage,
+        SetFeedMessage,
+        SetBatchSizeMessage,
+        SetDivisionMessage,
+        SetRuntimeParamsMessage,
+        GetLineageMessage,
+        AIIngestCaseMessage,
+        AISupportRequestMessage,
+    ],
+    Field(discriminator="type"),
+]
+
+message_adapter = TypeAdapter(InboundMessage)
+
+
+@dataclass
+class SimulationSession:
+    session_id: str
+    websocket: WebSocket
+    engine: SimulationEngine = field(default_factory=SimulationEngine)
+    manager: SimulationManager = field(init=False)
+    step_requested: bool = False
+    loop_task: Optional[asyncio.Task] = None
+
+    def __post_init__(self):
+        self.manager = SimulationManager(self.engine)
+
+
+sessions: Dict[str, SimulationSession] = {}
+
+
+def initialize_simulation(session: SimulationSession):
+    session.engine = SimulationEngine()
+    session.manager = SimulationManager(session.engine)
+    session.step_requested = False
+    logger.info("Simulation initialized for session=%s", session.session_id)
+
+
+def apply_initial_strain_config(session: SimulationSession, strain_config: InitialStrainConfig):
+    idx_candidates = np.where(session.engine.active_mask)[0]
     if len(idx_candidates) == 0:
         return
 
     idx = idx_candidates[0]
-    engine.traits[idx] = np.array([
-        _to_float(strain_config.get("mu_max"), 0.4),
-        _to_float(strain_config.get("Ks"), 1.0),
-        _to_float(strain_config.get("p"), 0.0),
-        _to_float(strain_config.get("r"), 0.0),
-        _to_float(strain_config.get("T_opt"), 25.0),
-        _to_float(strain_config.get("pH_opt"), 7.0),
-        _to_float(strain_config.get("Rad_res"), 0.0),
+    session.engine.traits[idx] = np.array([
+        float(strain_config.mu_max),
+        float(strain_config.Ks),
+        float(strain_config.p),
+        float(strain_config.r),
+        float(strain_config.T_opt),
+        float(strain_config.pH_opt),
+        float(strain_config.Rad_res),
     ])
-    engine.N[idx] = _to_float(strain_config.get("N0"), 500.0)
-    engine.m_costs[idx] = engine.calculate_maintenance(engine.traits[idx])
+    session.engine.N[idx] = float(strain_config.N0)
+    session.engine.m_costs[idx] = session.engine.calculate_maintenance(session.engine.traits[idx])
 
 
-def apply_environment_config(env_config: Dict[str, Any]):
-    manager.S = _to_float(env_config.get("S0"), 500.0)
-    manager.T = _to_float(env_config.get("T0"), 0.0)
-    manager.pH = _to_float(env_config.get("pH0"), 7.0)
-    manager.env_params[0] = _to_float(env_config.get("temp"), 25.0)
-    manager.env_params[1] = _to_float(env_config.get("rad"), 0.0)
-    manager.env_params[2] = max(0.0, _to_float(env_config.get("k_tox"), manager.env_params[2]))
-    manager.env_params[3] = max(0.0, _to_float(env_config.get("k_rad"), manager.env_params[3]))
-    manager.env_params[4] = max(0.0, _to_float(env_config.get("k_acid"), manager.env_params[4]))
-    manager.env_params[5] = _to_float(env_config.get("Y"), 100.0)
-    manager.env_params[6] = max(0.0, _to_float(env_config.get("d_T"), manager.env_params[6]))
-    manager.env_params[7] = max(0.0, _to_float(env_config.get("hgt_prob"), manager.env_params[7]))
-    manager.env_params[8] = max(0.0, _to_float(env_config.get("D"), manager.env_params[8]))
-    manager.env_params[9] = max(0.0, _to_float(env_config.get("S_in"), manager.env_params[9]))
-    manager.auto_feed_enabled = bool(env_config.get("auto_feed_enabled", True))
-    manager.feed_per_batch = max(0.0, _to_float(env_config.get("feed_per_batch"), 200.0))
-    manager.feed_max_s = max(0.0, _to_float(env_config.get("feed_max_s"), 10000.0))
-    manager.batch_size = max(1, _to_int(env_config.get("batch_size"), 100))
-    manager.max_rel_change_per_step = max(1e-8, _to_float(env_config.get("max_rel_change_per_step"), manager.max_rel_change_per_step))
-    manager.max_abs_s_change_per_step = max(1e-8, _to_float(env_config.get("max_abs_s_change_per_step"), manager.max_abs_s_change_per_step))
-    manager.k_hgt = max(0.0, _to_float(env_config.get("k_hgt"), manager.k_hgt))
-    manager.division_threshold = max(1.0, _to_float(env_config.get("division_threshold"), 5000.0))
+def apply_environment_config(session: SimulationSession, env_config: EnvironmentConfig):
+    manager = session.manager
+    manager.S = float(env_config.S0)
+    manager.T = float(env_config.T0)
+    manager.pH = float(env_config.pH0)
+    manager.env_params[0] = float(env_config.temp)
+    manager.env_params[1] = float(env_config.rad)
+    manager.env_params[2] = max(0.0, float(env_config.k_tox))
+    manager.env_params[3] = max(0.0, float(env_config.k_rad))
+    manager.env_params[4] = max(0.0, float(env_config.k_acid))
+    manager.env_params[5] = float(env_config.Y)
+    manager.env_params[6] = max(0.0, float(env_config.d_T))
+    manager.env_params[7] = max(0.0, float(env_config.hgt_prob))
+    manager.env_params[8] = max(0.0, float(env_config.D))
+    manager.env_params[9] = max(0.0, float(env_config.S_in))
+    manager.auto_feed_enabled = bool(env_config.auto_feed_enabled)
+    manager.feed_per_batch = max(0.0, float(env_config.feed_per_batch))
+    manager.feed_max_s = max(0.0, float(env_config.feed_max_s))
+    manager.batch_size = max(1, int(env_config.batch_size))
+    manager.max_rel_change_per_step = max(1e-8, float(env_config.max_rel_change_per_step))
+    manager.max_abs_s_change_per_step = max(1e-8, float(env_config.max_abs_s_change_per_step))
+    manager.k_hgt = max(0.0, float(env_config.k_hgt))
+    manager.division_threshold = max(1.0, float(env_config.division_threshold))
 
 
-def apply_runtime_params(params: Dict[str, Any]):
-    if "S" in params:
-        manager.S = _to_float(params.get("S"), manager.S)
-    if "T" in params:
-        manager.T = _to_float(params.get("T"), manager.T)
-    if "pH" in params:
-        manager.pH = _to_float(params.get("pH"), manager.pH)
+def apply_runtime_params(session: SimulationSession, params: SetRuntimeParamsMessage):
+    manager = session.manager
+    if params.S is not None:
+        manager.S = float(params.S)
+    if params.T is not None:
+        manager.T = float(params.T)
+    if params.pH is not None:
+        manager.pH = float(params.pH)
 
-    if "k_tox" in params:
-        manager.env_params[2] = max(0.0, _to_float(params.get("k_tox"), manager.env_params[2]))
-    if "k_rad" in params:
-        manager.env_params[3] = max(0.0, _to_float(params.get("k_rad"), manager.env_params[3]))
-    if "k_acid" in params:
-        manager.env_params[4] = max(0.0, _to_float(params.get("k_acid"), manager.env_params[4]))
-    if "d_T" in params:
-        manager.env_params[6] = max(0.0, _to_float(params.get("d_T"), manager.env_params[6]))
-    if "hgt_prob" in params:
-        manager.env_params[7] = max(0.0, _to_float(params.get("hgt_prob"), manager.env_params[7]))
-    if "D" in params:
-        manager.env_params[8] = max(0.0, _to_float(params.get("D"), manager.env_params[8]))
-    if "S_in" in params:
-        manager.env_params[9] = max(0.0, _to_float(params.get("S_in"), manager.env_params[9]))
+    if params.k_tox is not None:
+        manager.env_params[2] = max(0.0, float(params.k_tox))
+    if params.k_rad is not None:
+        manager.env_params[3] = max(0.0, float(params.k_rad))
+    if params.k_acid is not None:
+        manager.env_params[4] = max(0.0, float(params.k_acid))
+    if params.d_T is not None:
+        manager.env_params[6] = max(0.0, float(params.d_T))
+    if params.hgt_prob is not None:
+        manager.env_params[7] = max(0.0, float(params.hgt_prob))
+    if params.D is not None:
+        manager.env_params[8] = max(0.0, float(params.D))
+    if params.S_in is not None:
+        manager.env_params[9] = max(0.0, float(params.S_in))
 
-    if "max_rel_change_per_step" in params:
-        manager.max_rel_change_per_step = max(1e-8, _to_float(params.get("max_rel_change_per_step"), manager.max_rel_change_per_step))
-    if "max_abs_s_change_per_step" in params:
-        manager.max_abs_s_change_per_step = max(1e-8, _to_float(params.get("max_abs_s_change_per_step"), manager.max_abs_s_change_per_step))
+    if params.max_rel_change_per_step is not None:
+        manager.max_rel_change_per_step = max(1e-8, float(params.max_rel_change_per_step))
+    if params.max_abs_s_change_per_step is not None:
+        manager.max_abs_s_change_per_step = max(1e-8, float(params.max_abs_s_change_per_step))
+    if params.k_hgt is not None:
+        manager.k_hgt = max(0.0, float(params.k_hgt))
+    if params.division_threshold is not None:
+        manager.division_threshold = max(1.0, float(params.division_threshold))
 
-    if "k_hgt" in params:
-        manager.k_hgt = max(0.0, _to_float(params.get("k_hgt"), manager.k_hgt))
-    if "division_threshold" in params:
-        manager.division_threshold = max(1.0, _to_float(params.get("division_threshold"), manager.division_threshold))
 
-
-def build_current_snapshot() -> Dict[str, Any]:
-    snapshot = manager.get_snapshot()
+def build_current_snapshot(session: SimulationSession) -> Dict[str, Any]:
+    snapshot = session.manager.get_snapshot()
     snapshot["control"] = {
-        "D": float(manager.env_params[8]),
-        "S_in": float(manager.env_params[9]),
-        "batch_size": int(manager.batch_size),
-        "k_hgt": float(manager.k_hgt),
-        "division_threshold": float(manager.division_threshold),
+        "D": float(session.manager.env_params[8]),
+        "S_in": float(session.manager.env_params[9]),
+        "batch_size": int(session.manager.batch_size),
+        "k_hgt": float(session.manager.k_hgt),
+        "division_threshold": float(session.manager.division_threshold),
     }
     return snapshot
 
 
-async def handle_start_message(msg: Dict[str, Any]):
-    logger.info("START received - initializing with custom settings")
-    initialize_simulation()
-    engine.spawn(initial=True)
+async def handle_start_message(msg: StartMessage, session: SimulationSession):
+    logger.info("START received - initializing with custom settings: session=%s", session.session_id)
+    initialize_simulation(session)
+    session.engine.spawn(initial=True)
+    apply_initial_strain_config(session, msg.initial_strain)
+    apply_environment_config(session, msg.environment)
 
-    if "initial_strain" in msg:
-        apply_initial_strain_config(msg["initial_strain"])
-
-    if "environment" in msg:
-        apply_environment_config(msg["environment"])
-
-    idx_candidates = np.where(engine.active_mask)[0]
+    idx_candidates = np.where(session.engine.active_mask)[0]
     idx = idx_candidates[0] if len(idx_candidates) > 0 else 0
-    manager.is_running = True
-    logger.info(f"Simulation started - S={manager.S}, N={engine.N[idx]}, mu_max={engine.traits[idx,0]}")
+    session.manager.is_running = True
+    logger.info("Simulation started: session=%s S=%.3f N=%.3f mu_max=%.3f",
+                session.session_id,
+                session.manager.S,
+                session.engine.N[idx],
+                session.engine.traits[idx, 0])
 
 
-async def handle_control_message(msg: Dict[str, Any], websocket: WebSocket):
-    global step_requested
-    msg_type = msg.get("type")
-
-    if msg_type == "RESET":
-        logger.info("RESET received")
-        initialize_simulation()
-        await broadcast_state({"type": "RESET_COMPLETE"})
+async def handle_control_message(msg: InboundMessage, session: SimulationSession):
+    if isinstance(msg, ResetMessage):
+        logger.info("RESET received: session=%s", session.session_id)
+        initialize_simulation(session)
+        await send_to_websocket(session.websocket, {"type": "RESET_COMPLETE"})
         return
 
-    if msg_type == "RESUME":
-        manager.is_running = True
+    if isinstance(msg, ResumeMessage):
+        session.manager.is_running = True
         return
 
-    if msg_type == "PAUSE":
-        manager.is_running = False
+    if isinstance(msg, PauseMessage):
+        session.manager.is_running = False
         return
 
-    if msg_type == "STEP":
-        if manager:
-            step_requested = True
+    if isinstance(msg, StepMessage):
+        session.step_requested = True
         return
 
-    if msg_type == "SET_ENV":
-        if "temp" in msg:
-            manager.env_params[0] = _to_float(msg.get("temp"), manager.env_params[0])
-        if "rad" in msg:
-            manager.env_params[1] = _to_float(msg.get("rad"), manager.env_params[1])
+    if isinstance(msg, SetEnvMessage):
+        if msg.temp is not None:
+            session.manager.env_params[0] = float(msg.temp)
+        if msg.rad is not None:
+            session.manager.env_params[1] = float(msg.rad)
         return
 
-    if msg_type == "SET_FLOW":
-        if "D" in msg:
-            manager.env_params[8] = max(0.0, _to_float(msg.get("D"), manager.env_params[8]))
-        if "S_in" in msg:
-            manager.env_params[9] = max(0.0, _to_float(msg.get("S_in"), manager.env_params[9]))
+    if isinstance(msg, SetFlowMessage):
+        if msg.D is not None:
+            session.manager.env_params[8] = max(0.0, float(msg.D))
+        if msg.S_in is not None:
+            session.manager.env_params[9] = max(0.0, float(msg.S_in))
         return
 
-    if msg_type == "SET_ADAPTIVE_DT":
-        if "enabled" in msg:
-            manager.adaptive_dt_enabled = bool(msg.get("enabled"))
-        if "dt_min" in msg:
-            manager.dt_min = max(1e-5, _to_float(msg.get("dt_min"), manager.dt_min))
-        if "dt_max" in msg:
-            manager.dt_max = max(manager.dt_min, _to_float(msg.get("dt_max"), manager.dt_max))
+    if isinstance(msg, SetAdaptiveDtMessage):
+        if msg.enabled is not None:
+            session.manager.adaptive_dt_enabled = bool(msg.enabled)
+        if msg.dt_min is not None:
+            session.manager.dt_min = max(1e-5, float(msg.dt_min))
+        if msg.dt_max is not None:
+            session.manager.dt_max = max(session.manager.dt_min, float(msg.dt_max))
         return
 
-    if msg_type == "SET_FEED":
-        if "enabled" in msg:
-            manager.auto_feed_enabled = bool(msg.get("enabled"))
-        if "per_batch" in msg:
-            manager.feed_per_batch = max(0.0, _to_float(msg.get("per_batch"), manager.feed_per_batch))
-        if "max_s" in msg:
-            manager.feed_max_s = max(0.0, _to_float(msg.get("max_s"), manager.feed_max_s))
+    if isinstance(msg, SetFeedMessage):
+        if msg.enabled is not None:
+            session.manager.auto_feed_enabled = bool(msg.enabled)
+        if msg.per_batch is not None:
+            session.manager.feed_per_batch = max(0.0, float(msg.per_batch))
+        if msg.max_s is not None:
+            session.manager.feed_max_s = max(0.0, float(msg.max_s))
         return
 
-    if msg_type == "SET_BATCH_SIZE":
-        if "batch_size" in msg:
-            manager.batch_size = max(1, _to_int(msg.get("batch_size"), manager.batch_size))
-
-    if msg_type == "SET_DIVISION":
-        if "threshold" in msg:
-            manager.division_threshold = max(1.0, _to_float(msg.get("threshold"), manager.division_threshold))
+    if isinstance(msg, SetBatchSizeMessage):
+        session.manager.batch_size = max(1, int(msg.batch_size))
         return
 
-    if msg_type == "SET_RUNTIME_PARAMS":
-        apply_runtime_params(msg)
+    if isinstance(msg, SetDivisionMessage):
+        session.manager.division_threshold = max(1.0, float(msg.threshold))
         return
 
-    if msg_type == "GET_LINEAGE":
-        strain_id = _to_int(msg.get("strain_id"), -1)
-        max_depth = max(1, _to_int(msg.get("max_depth"), 200))
+    if isinstance(msg, SetRuntimeParamsMessage):
+        apply_runtime_params(session, msg)
+        return
+
+    if isinstance(msg, GetLineageMessage):
+        strain_id = int(msg.strain_id)
+        max_depth = max(1, int(msg.max_depth))
         if strain_id < 0:
-            await send_to_websocket(websocket, {
+            await send_to_websocket(session.websocket, {
                 "type": "LINEAGE_DATA",
                 "ok": False,
                 "error": "invalid_strain_id",
             })
             return
 
-        lineage = engine.get_lineage(strain_id=strain_id, max_depth=max_depth)
-        await send_to_websocket(websocket, {
+        lineage = session.engine.get_lineage(strain_id=strain_id, max_depth=max_depth)
+        await send_to_websocket(session.websocket, {
             "type": "LINEAGE_DATA",
             "ok": True,
             "lineage": lineage,
         })
         return
 
-    if msg_type == "AI_INGEST_CASE":
-        before_snapshot = msg.get("before_snapshot")
-        after_snapshot = msg.get("after_snapshot")
-        action = msg.get("action")
-
-        if not isinstance(before_snapshot, dict) or not isinstance(after_snapshot, dict):
-            await send_to_websocket(websocket, {
-                "type": "AI_INGEST_ACK",
-                "ok": False,
-                "error": "before_snapshot and after_snapshot are required",
-            })
-            return
-
-        result = ai_vector_store.ingest_case(before_snapshot, after_snapshot, action)
-        await send_to_websocket(websocket, {
+    if isinstance(msg, AIIngestCaseMessage):
+        result = await ai_vector_store.ingest_case(msg.before_snapshot, msg.after_snapshot, msg.action)
+        await send_to_websocket(session.websocket, {
             "type": "AI_INGEST_ACK",
             **result,
         })
         return
 
-    if msg_type == "AI_SUPPORT_REQUEST":
-        current_snapshot = msg.get("current_snapshot")
-        if not isinstance(current_snapshot, dict):
-            current_snapshot = build_current_snapshot()
+    if isinstance(msg, AISupportRequestMessage):
+        current_snapshot = msg.current_snapshot if isinstance(msg.current_snapshot, dict) else build_current_snapshot(session)
 
-        result = ai_vector_store.retrieve_similar(
+        result = await ai_vector_store.retrieve_similar(
             current_snapshot=current_snapshot,
-            top_k=max(1, _to_int(msg.get("top_k"), 8)),
+            top_k=max(1, int(msg.top_k)),
         )
-        await send_to_websocket(websocket, {
+        await send_to_websocket(session.websocket, {
             "type": "AI_SUPPORT_RESULT",
             **result,
         })
         return
 
 
-async def check_and_notify_extinction():
-    global step_requested
-    active_idx = np.where(engine.active_mask)[0]
+async def check_and_notify_extinction(session: SimulationSession):
+    active_idx = np.where(session.engine.active_mask)[0]
     if len(active_idx) != 0:
         return
 
-    logger.warning("Extinction detected - simulation stopped")
-    manager.is_running = False
-    step_requested = False
-    await broadcast_state({
+    logger.warning("Extinction detected - simulation stopped: session=%s", session.session_id)
+    session.manager.is_running = False
+    session.step_requested = False
+    await send_to_websocket(session.websocket, {
         "type": "SIMULATION_ENDED",
         "reason": "extinction",
-        "final_step": engine.total_steps
+        "final_step": session.engine.total_steps
     })
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting background task...")
-    task = asyncio.create_task(run_simulation_loop())
+    logger.info("Starting API server...")
     yield
-    task.cancel()
 
-async def run_simulation_loop():
-    """シミュレーションループ（絶滅検出付き）"""
-    global step_requested
+
+async def run_simulation_loop(session: SimulationSession):
     while True:
         try:
-            if manager and (manager.is_running or step_requested):
-                force_step = (not manager.is_running) and step_requested
-                await manager.run_loop(broadcast_state, force_step=force_step)
+            if session.manager and (session.manager.is_running or session.step_requested):
+                force_step = (not session.manager.is_running) and session.step_requested
+                await session.manager.run_loop(
+                    lambda data: send_to_websocket(session.websocket, data),
+                    force_step=force_step,
+                )
                 if force_step:
-                    step_requested = False
-                await check_and_notify_extinction()
+                    session.step_requested = False
+                await check_and_notify_extinction(session)
             else:
                 await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            break
         except Exception:
-            logger.exception("Simulation loop error")
-            if manager:
-                manager.is_running = False
+            logger.exception("Simulation loop error: session=%s", session.session_id)
+            if session.manager:
+                session.manager.is_running = False
             await asyncio.sleep(0.1)
-
-async def broadcast_state(data):
-    msg = json.dumps(data)
-    disconnected = []
-    for ws in active_websockets:
-        try:
-            await ws.send_text(msg)
-        except:
-            disconnected.append(ws)
-    for ws in disconnected:
-        active_websockets.remove(ws)
 
 
 async def send_to_websocket(websocket: WebSocket, data: Dict[str, Any]):
@@ -337,21 +464,41 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"])
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    active_websockets.append(websocket)
-    logger.info(f"WebSocket connected (total: {len(active_websockets)})")
-    
+    session_id = str(uuid4())
+    session = SimulationSession(session_id=session_id, websocket=websocket)
+    sessions[session_id] = session
+    session.loop_task = asyncio.create_task(run_simulation_loop(session))
+    logger.info("WebSocket connected: session=%s total=%s", session_id, len(sessions))
+
     try:
         while True:
             data = await websocket.receive_text()
-            msg = json.loads(data)
-            if msg.get("type") == "START":
-                await handle_start_message(msg)
+            raw_msg = json.loads(data)
+            try:
+                msg = message_adapter.validate_python(raw_msg)
+            except ValidationError as e:
+                await send_to_websocket(websocket, {
+                    "type": "VALIDATION_ERROR",
+                    "ok": False,
+                    "error": "invalid websocket payload",
+                    "detail": e.errors(),
+                })
+                continue
+
+            if isinstance(msg, StartMessage):
+                await handle_start_message(msg, session)
             else:
-                await handle_control_message(msg, websocket)
-                    
+                await handle_control_message(msg, session)
+
     except WebSocketDisconnect:
-        active_websockets.remove(websocket)
-        logger.info(f"WebSocket disconnected (remaining: {len(active_websockets)})")
+        pass
+    finally:
+        sessions.pop(session_id, None)
+        if session.loop_task:
+            session.loop_task.cancel()
+            with suppress(Exception):
+                await session.loop_task
+        logger.info("WebSocket disconnected: session=%s remaining=%s", session_id, len(sessions))
 
 if __name__ == "__main__":
     import uvicorn
