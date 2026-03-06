@@ -338,7 +338,32 @@ export default function Home() {
 
   // WebSocket接続
   useEffect(() => {
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws";
+    const envWsUrl = process.env.NEXT_PUBLIC_WS_URL;
+    const wsUrl = (() => {
+      if (typeof window === "undefined") {
+        return envWsUrl ?? "ws://localhost:8000/ws";
+      }
+
+      const derived = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:8000/ws`;
+      if (!envWsUrl) return derived;
+
+      try {
+        const parsed = new URL(envWsUrl);
+        const envIsLocal = ["localhost", "127.0.0.1"].includes(parsed.hostname);
+        const pageIsLocal = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+
+        if (envIsLocal && !pageIsLocal) {
+          return derived;
+        }
+
+        if (window.location.protocol === "https:" && parsed.protocol === "ws:") {
+          parsed.protocol = "wss:";
+        }
+        return parsed.toString();
+      } catch {
+        return derived;
+      }
+    })();
     const ws = new WebSocket(wsUrl);
     
     ws.onopen = () => {
