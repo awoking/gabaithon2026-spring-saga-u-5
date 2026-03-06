@@ -5,8 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { BarChart3, Activity, Thermometer, Droplets, Zap, FlaskConical, Play } from "lucide-react";
+import { Activity, Thermometer, Droplets, Zap, FlaskConical, Play } from "lucide-react";
 import { ColosseumChamber } from "@/components/ColosseumChamber";
 
 type SimulationState = 'setup' | 'running' | 'finished';
@@ -30,6 +29,10 @@ type SimulationData = {
     per_batch: number;
     max_s: number;
   };
+  pool?: {
+    plasmids: number[];
+    concentrations: number[];
+  };
   ranking: Array<{
     id: number;
     N: number;
@@ -47,6 +50,73 @@ type SimulationData = {
     division_count: number;
     hgt_count: number;
   };
+};
+
+type AIChatMessage = {
+  role: "user" | "assistant" | "system";
+  text: string;
+  at: string;
+};
+
+type AIParamMap = Record<string, number>;
+
+const AI_PARAM_KEY_ALIASES: Record<string, string> = {
+  s: "S",
+  substrate: "S",
+  toxin: "T",
+  t: "T",
+  ph: "pH",
+  p_h: "pH",
+  ph_value: "pH",
+  k_tox: "k_tox",
+  k_rad: "k_rad",
+  k_acid: "k_acid",
+  d_t: "d_T",
+  hgt_prob: "hgt_prob",
+  d: "D",
+  dilution: "D",
+  s_in: "S_in",
+  inflow_s: "S_in",
+  max_rel_change_per_step: "max_rel_change_per_step",
+  max_abs_s_change_per_step: "max_abs_s_change_per_step",
+  k_hgt: "k_hgt",
+  division_threshold: "division_threshold",
+  batch_size: "batch_size",
+};
+
+type RuntimeEnvConfig = {
+  S: number;
+  T: number;
+  pH: number;
+  temp: number;
+  rad: number;
+  D: number;
+  S_in: number;
+};
+
+type LastStrainSummary = SimulationData["ranking"][number] | null;
+
+type LastEnvSummary = {
+  S: number;
+  T: number;
+  pH: number;
+  temp: number;
+  rad: number;
+} | null;
+
+type LineageNode = {
+  id: number;
+  parent_id: number;
+  birth_step: number;
+  birth_event: string;
+  alive?: boolean;
+};
+
+type LineagePayload = {
+  target_id: number;
+  nodes: LineageNode[];
+  depth: number;
+  truncated: boolean;
 };
 
 // デフォルト値（検証済みの安定プリセット）
@@ -90,14 +160,180 @@ export default function Home() {
   const [isConnected, setIsConnected] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [data, setData] = useState<SimulationData | null>(null);
+  const [aiMessages, setAiMessages] = useState<AIChatMessage[]>([]);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [lastAiParams, setLastAiParams] = useState<AIParamMap>({});
+  const [lastAiRecommendation, setLastAiRecommendation] = useState<Record<string, unknown> | null>(null);
+  const [leftPanelTab, setLeftPanelTab] = useState<"ranking" | "env">("ranking");
+  const [runtimeEnvConfig, setRuntimeEnvConfig] = useState<RuntimeEnvConfig | null>(null);
+  const [runtimeEnvInitialized, setRuntimeEnvInitialized] = useState(false);
   const [finalStep, setFinalStep] = useState(0);
+  const [peakTotalN, setPeakTotalN] = useState<{ value: number; step: number } | null>(null);
+  const [lastSurvivor, setLastSurvivor] = useState<LastStrainSummary>(null);
+  const [lastPreExtinctionEnv, setLastPreExtinctionEnv] = useState<LastEnvSummary>(null);
+  const [lineageData, setLineageData] = useState<LineagePayload | null>(null);
+  const [lineageError, setLineageError] = useState<string | null>(null);
+  const [isLineageLoading, setIsLineageLoading] = useState(false);
+  const [selectedLineageId, setSelectedLineageId] = useState<number | null>(null);
+  const [showLineagePanel, setShowLineagePanel] = useState(true);
   const [showAdvancedSetup, setShowAdvancedSetup] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const isRunningRef = useRef(false);
+  const lineageContainerRef = useRef<HTMLDivElement | null>(null);
 
   // 設定フォーム
   const [strainConfig, setStrainConfig] = useState(DEFAULT_STRAIN);
   const [envConfig, setEnvConfig] = useState(DEFAULT_ENV);
+
+  const formatAiValue = (value: unknown): string => {
+    if (value === null || value === undefined) return "null";
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  };
+
+  const buildLineageMermaid = (lineage: LineagePayload): string => {
+    const ordered = [...lineage.nodes].reverse();
+    const lines: string[] = ["flowchart TD"];
+
+    for (const node of ordered) {
+      const status = node.alive ? "alive" : "dead";
+      lines.push(`n${node.id}[\"#${node.id} | step:${node.birth_step} | ${node.birth_event} | ${status}\"]`);
+    }
+
+    for (let index = 0; index < ordered.length - 1; index += 1) {
+      lines.push(`n${ordered[index].id} --> n${ordered[index + 1].id}`);
+    }
+
+    return lines.join("\n");
+  };
+
+  const requestLineage = (strainId: number) => {
+    setShowLineagePanel(true);
+    setSelectedLineageId(strainId);
+    setLineageError(null);
+    setIsLineageLoading(true);
+    sendMessage({ type: "GET_LINEAGE", strain_id: strainId, max_depth: 200 });
+  };
+
+  useEffect(() => {
+    if (!lineageData || !lineageContainerRef.current) return;
+
+    const render = async () => {
+      try {
+        const mermaid = (await import("mermaid")).default;
+        mermaid.initialize({ startOnLoad: false, theme: "dark" });
+        const diagramId = `lineage-${Date.now()}-${lineageData.target_id}`;
+        const { svg } = await mermaid.render(diagramId, buildLineageMermaid(lineageData));
+        if (lineageContainerRef.current) {
+          lineageContainerRef.current.innerHTML = svg;
+        }
+      } catch (error) {
+        setLineageError(`系統図の描画に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+
+    render();
+  }, [lineageData]);
+
+  const extractApplicableParams = (raw: unknown): AIParamMap => {
+    if (!raw) return {};
+
+    const allowedKeys = new Set([
+      "S", "T", "pH", "k_tox", "k_rad", "k_acid", "d_T", "hgt_prob",
+      "D", "S_in", "max_rel_change_per_step", "max_abs_s_change_per_step",
+      "k_hgt", "division_threshold", "batch_size",
+    ]);
+
+    const normalizeKey = (key: string): string | null => {
+      const canonical = AI_PARAM_KEY_ALIASES[key.trim().toLowerCase()] ?? key;
+      return allowedKeys.has(canonical) ? canonical : null;
+    };
+
+    const toNumeric = (value: unknown): number | null => {
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string") {
+        const num = Number(value.trim());
+        return Number.isFinite(num) ? num : null;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          const num = toNumeric(item);
+          if (num !== null) return num;
+        }
+        return null;
+      }
+      if (value && typeof value === "object") {
+        const obj = value as Record<string, unknown>;
+        const candidateKeys = ["value", "new_value", "new", "to", "recommended", "set_to", "next", "after"];
+        for (const candidateKey of candidateKeys) {
+          if (candidateKey in obj) {
+            const num = toNumeric(obj[candidateKey]);
+            if (num !== null) return num;
+          }
+        }
+      }
+      return null;
+    };
+
+    const parsed: AIParamMap = {};
+
+    const consumeEntry = (sourceKey: string, sourceValue: unknown) => {
+      const normalized = normalizeKey(sourceKey);
+      if (normalized) {
+        const num = toNumeric(sourceValue);
+        if (num !== null) parsed[normalized] = num;
+      }
+
+      if (sourceValue && typeof sourceValue === "object") {
+        collectFromUnknown(sourceValue);
+      }
+    };
+
+    const collectFromUnknown = (value: unknown) => {
+      if (!value) return;
+
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          collectFromUnknown(item);
+        }
+        return;
+      }
+
+      if (typeof value !== "object") return;
+
+      for (const [nestedKey, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+        consumeEntry(nestedKey, nestedValue);
+      }
+    };
+
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (!item || typeof item !== "object") continue;
+        const obj = item as Record<string, unknown>;
+        const sourceKey = String(obj.param ?? obj.key ?? obj.name ?? obj.field ?? "");
+        const normalized = sourceKey ? normalizeKey(sourceKey) : null;
+        if (!normalized) continue;
+        const num = toNumeric(obj.value ?? obj.new_value ?? obj.new ?? obj.to ?? obj.recommended ?? obj.set_to ?? obj);
+        if (num !== null) parsed[normalized] = num;
+      }
+      collectFromUnknown(raw);
+      return parsed;
+    }
+
+    if (typeof raw === "object") {
+      for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        consumeEntry(key, value);
+      }
+    }
+
+    return parsed;
+  };
 
   // WebSocket接続
   useEffect(() => {
@@ -114,6 +350,81 @@ export default function Home() {
       if (message.type === "BATCH_UPDATE") {
         if (!isRunningRef.current) return;
         setData(message);
+
+        const totalN = Number(message?.stats?.total_N ?? 0);
+        const step = Number(message?.step ?? 0);
+        if (Number.isFinite(totalN)) {
+          setPeakTotalN((prev) => {
+            if (!prev || totalN > prev.value) {
+              return { value: totalN, step };
+            }
+            return prev;
+          });
+        }
+
+        const activeStrains = Number(message?.stats?.active_strains ?? 0);
+        if (Number.isFinite(activeStrains) && activeStrains > 0) {
+          const top = Array.isArray(message?.ranking) && message.ranking.length > 0 ? message.ranking[0] : null;
+          if (top) {
+            setLastSurvivor(top);
+          }
+          if (message?.env) {
+            setLastPreExtinctionEnv({
+              S: Number(message.env.S),
+              T: Number(message.env.T),
+              pH: Number(message.env.pH),
+              temp: Number(message.env.temp),
+              rad: Number(message.env.rad),
+            });
+          }
+        }
+      } else if (message.type === "LINEAGE_DATA") {
+        setIsLineageLoading(false);
+        if (!message.ok) {
+          setLineageError(message.error ?? "lineage取得に失敗しました");
+          setLineageData(null);
+          return;
+        }
+        setLineageError(null);
+        setLineageData(message.lineage as LineagePayload);
+      } else if (message.type === "AI_SUPPORT_RESULT") {
+        setIsAiLoading(false);
+        if (!message.ok) {
+          setAiMessages((prev) => ([
+            ...prev,
+            {
+              role: "system",
+              text: `AIサポートの取得に失敗しました: ${message.error ?? "unknown error"}`,
+              at: new Date().toLocaleTimeString(),
+            },
+          ]));
+          return;
+        }
+
+        const recommendation = message.recommendation ?? {};
+        setLastAiRecommendation(recommendation);
+        const rawParamUpdates =
+          recommendation.param_updates
+          ?? recommendation.parameters
+          ?? recommendation.suggested_params
+          ?? recommendation.updates
+          ?? {};
+        const applicableParams = extractApplicableParams(rawParamUpdates);
+        setLastAiParams(applicableParams);
+        const summary = recommendation.summary ?? "提案を受信しました。";
+        const reasoning = recommendation.reasoning ? `\n\n根拠:\n${recommendation.reasoning}` : "";
+        const updates = recommendation.param_updates && Object.keys(recommendation.param_updates).length > 0
+          ? `\n\n推奨パラメータ:\n${Object.entries(recommendation.param_updates).map(([k, v]) => `- ${k}: ${formatAiValue(v)}`).join("\n")}`
+          : "";
+
+        setAiMessages((prev) => ([
+          ...prev,
+          {
+            role: "assistant",
+            text: `${summary}${updates}${reasoning}`,
+            at: new Date().toLocaleTimeString(),
+          },
+        ]));
       } else if (message.type === "SIMULATION_ENDED") {
         if (!isRunningRef.current) return;
         console.log("Simulation ended:", message.reason);
@@ -157,6 +468,20 @@ export default function Home() {
     setState('running');
     setIsPaused(false);
     setData(null);
+    setAiMessages([]);
+    setIsAiLoading(false);
+    setLastAiParams({});
+    setLastAiRecommendation(null);
+    setLeftPanelTab("ranking");
+    setRuntimeEnvConfig(null);
+    setRuntimeEnvInitialized(false);
+    setPeakTotalN(null);
+    setLastSurvivor(null);
+    setLastPreExtinctionEnv(null);
+    setLineageData(null);
+    setLineageError(null);
+    setIsLineageLoading(false);
+    setSelectedLineageId(null);
   };
 
   const handlePauseResume = () => {
@@ -190,7 +515,159 @@ export default function Home() {
     setShowAdvancedSetup(false);
     setStrainConfig(DEFAULT_STRAIN);
     setEnvConfig(DEFAULT_ENV);
+    setAiMessages([]);
+    setIsAiLoading(false);
+    setLastAiParams({});
+    setLastAiRecommendation(null);
+    setLeftPanelTab("ranking");
+    setRuntimeEnvConfig(null);
+    setRuntimeEnvInitialized(false);
+    setPeakTotalN(null);
+    setLastSurvivor(null);
+    setLastPreExtinctionEnv(null);
+    setLineageData(null);
+    setLineageError(null);
+    setIsLineageLoading(false);
+    setSelectedLineageId(null);
   };
+
+  const handleAskAI = () => {
+    if (!data || isAiLoading) return;
+
+    setAiMessages((prev) => ([
+      ...prev,
+      {
+        role: "user",
+        text: "AIに聞いてみる: 現在の状態から次の打ち手を提案して。",
+        at: new Date().toLocaleTimeString(),
+      },
+    ]));
+
+    setIsAiLoading(true);
+    sendMessage({
+      type: "AI_SUPPORT_REQUEST",
+      current_snapshot: data,
+      top_k: 8,
+    });
+  };
+
+  const handleApplyAiSuggestion = () => {
+    const fallbackFromRecommendation = extractApplicableParams(
+      lastAiRecommendation?.param_updates
+      ?? lastAiRecommendation?.parameters
+      ?? lastAiRecommendation?.suggested_params
+      ?? lastAiRecommendation?.updates
+      ?? lastAiRecommendation
+      ?? {}
+    );
+
+    const fallbackFromMessageText: AIParamMap = {};
+    const latestAssistantMessage = [...aiMessages].reverse().find((msg) => msg.role === "assistant");
+    if (latestAssistantMessage?.text) {
+      const dMatch = latestAssistantMessage.text.match(/\bD\s*[:=]\s*([0-9]*\.?[0-9]+)/i);
+      const sInMatch = latestAssistantMessage.text.match(/\bS_in\s*[:=]\s*([0-9]*\.?[0-9]+)/i);
+      if (dMatch) fallbackFromMessageText.D = Number(dMatch[1]);
+      if (sInMatch) fallbackFromMessageText.S_in = Number(sInMatch[1]);
+    }
+
+    const effectiveParams: AIParamMap =
+      Object.keys(lastAiParams).length > 0
+        ? lastAiParams
+        : Object.keys(fallbackFromRecommendation).length > 0
+          ? fallbackFromRecommendation
+          : fallbackFromMessageText;
+
+    if (Object.keys(effectiveParams).length === 0) {
+      setAiMessages((prev) => ([
+        ...prev,
+        {
+          role: "system",
+          text: "適用可能な提案パラメータがありません。",
+          at: new Date().toLocaleTimeString(),
+        },
+      ]));
+      return;
+    }
+
+    setLastAiParams(effectiveParams);
+
+    const { batch_size, ...runtimeParams } = effectiveParams;
+    if (Object.keys(runtimeParams).length > 0) {
+      sendMessage({ type: "SET_RUNTIME_PARAMS", ...runtimeParams });
+    }
+
+    if (batch_size !== undefined) {
+      const sanitizedBatch = Math.max(1, Math.floor(batch_size));
+      sendMessage({ type: "SET_BATCH_SIZE", batch_size: sanitizedBatch });
+      setEnvConfig((prev) => ({ ...prev, batch_size: sanitizedBatch }));
+    }
+
+    setAiMessages((prev) => ([
+      ...prev,
+      {
+        role: "system",
+        text: `AI提案を適用しました（${Object.keys(effectiveParams).join(", ")}）。`,
+        at: new Date().toLocaleTimeString(),
+      },
+    ]));
+  };
+
+  const handleApplyRuntimeEnv = () => {
+    if (!runtimeEnvConfig) return;
+
+    sendMessage({
+      type: "SET_RUNTIME_PARAMS",
+      S: runtimeEnvConfig.S,
+      T: runtimeEnvConfig.T,
+      pH: runtimeEnvConfig.pH,
+      D: runtimeEnvConfig.D,
+      S_in: runtimeEnvConfig.S_in,
+    });
+    sendMessage({
+      type: "SET_ENV",
+      temp: runtimeEnvConfig.temp,
+      rad: runtimeEnvConfig.rad,
+    });
+
+    setAiMessages((prev) => ([
+      ...prev,
+      {
+        role: "system",
+        text: "実行中の環境パラメータを反映しました。",
+        at: new Date().toLocaleTimeString(),
+      },
+    ]));
+  };
+
+  const handleNudgePH = () => {
+    if (!data) return;
+    const delta = (Math.random() - 0.5) * 0.1;
+    const nextPH = Number((data.env.pH + delta).toFixed(2));
+    sendMessage({ type: "SET_RUNTIME_PARAMS", pH: nextPH });
+    setRuntimeEnvConfig((prev) => (prev ? { ...prev, pH: nextPH } : prev));
+  };
+
+  const handleNudgeRad = () => {
+    if (!data) return;
+    const delta = (Math.random() - 0.5) * 0.2;
+    const nextRad = Math.max(0, Number((data.env.rad + delta).toFixed(2)));
+    sendMessage({ type: "SET_ENV", rad: nextRad });
+    setRuntimeEnvConfig((prev) => (prev ? { ...prev, rad: nextRad } : prev));
+  };
+
+  useEffect(() => {
+    if (state !== "running" || !data || runtimeEnvInitialized) return;
+    setRuntimeEnvConfig({
+      S: Number(data.env.S),
+      T: Number(data.env.T),
+      pH: Number(data.env.pH),
+      temp: Number(data.env.temp),
+      rad: Number(data.env.rad),
+      D: Number(envConfig.D),
+      S_in: Number(envConfig.S_in),
+    });
+    setRuntimeEnvInitialized(true);
+  }, [state, data, runtimeEnvInitialized, envConfig.D, envConfig.S_in]);
 
   // 設定画面
   if (state === 'setup') {
@@ -592,20 +1069,43 @@ export default function Home() {
               </div>
 
               {data && (
-                <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                   <div className="bg-slate-900/50 p-4 rounded">
                     <div className="text-slate-400 mb-1">最終統計</div>
                     <div className="space-y-1">
                       <div>分裂回数: <span className="font-mono text-purple-400">{data.stats.division_count}</span></div>
                       <div>HGT回数: <span className="font-mono text-orange-400">{data.stats.hgt_count}</span></div>
+                      <div>最高総個体数: <span className="font-mono text-green-300">{peakTotalN ? peakTotalN.value.toFixed(1) : "-"}</span></div>
+                      <div>最高到達STEP: <span className="font-mono text-white">{peakTotalN ? peakTotalN.step.toLocaleString() : "-"}</span></div>
                     </div>
                   </div>
                   <div className="bg-slate-900/50 p-4 rounded">
-                    <div className="text-slate-400 mb-1">最終環境</div>
+                    <div className="text-slate-400 mb-1">直前の環境パラメーター</div>
                     <div className="space-y-1">
-                      <div>基質: <span className="font-mono text-yellow-400">{data.env.S.toFixed(1)}</span></div>
-                      <div>pH: <span className="font-mono text-cyan-400">{data.env.pH.toFixed(2)}</span></div>
+                      <div>基質 S: <span className="font-mono text-yellow-400">{lastPreExtinctionEnv ? lastPreExtinctionEnv.S.toFixed(1) : "-"}</span></div>
+                      <div>毒素 T: <span className="font-mono text-white">{lastPreExtinctionEnv ? lastPreExtinctionEnv.T.toFixed(2) : "-"}</span></div>
+                      <div>環境 pH: <span className="font-mono text-cyan-400">{lastPreExtinctionEnv ? lastPreExtinctionEnv.pH.toFixed(2) : "-"}</span></div>
+                      <div>温度 temp: <span className="font-mono text-orange-300">{lastPreExtinctionEnv ? lastPreExtinctionEnv.temp.toFixed(1) : "-"}</span></div>
+                      <div>放射線 rad: <span className="font-mono text-pink-300">{lastPreExtinctionEnv ? lastPreExtinctionEnv.rad.toFixed(2) : "-"}</span></div>
                     </div>
+                  </div>
+                  <div className="bg-slate-900/50 p-4 rounded md:col-span-2">
+                    <div className="text-slate-400 mb-1">最後に残った株の詳細データ</div>
+                    {lastSurvivor ? (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                        <div>ID: <span className="font-mono text-blue-400">#{lastSurvivor.id}</span></div>
+                        <div>個体数 N: <span className="font-mono text-green-300">{lastSurvivor.N.toFixed(2)}</span></div>
+                        <div>μ_max: <span className="font-mono text-purple-300">{lastSurvivor.mu_max.toFixed(3)}</span></div>
+                        <div>Ks: <span className="font-mono text-cyan-300">{lastSurvivor.Ks.toFixed(3)}</span></div>
+                        <div>p: <span className="font-mono text-white">{lastSurvivor.p.toFixed(3)}</span></div>
+                        <div>r: <span className="font-mono text-white">{lastSurvivor.r.toFixed(3)}</span></div>
+                        <div>T_opt: <span className="font-mono text-orange-300">{lastSurvivor.T_opt.toFixed(2)}</span></div>
+                        <div>pH_opt: <span className="font-mono text-cyan-300">{lastSurvivor.pH_opt.toFixed(2)}</span></div>
+                        <div>Rad_res: <span className="font-mono text-pink-300">{lastSurvivor.Rad_res.toFixed(3)}</span></div>
+                      </div>
+                    ) : (
+                      <div className="text-slate-500 text-xs">生存株データが取得できませんでした。</div>
+                    )}
                   </div>
                 </div>
               )}
@@ -720,12 +1220,26 @@ export default function Home() {
             {[
               { label: "基質濃度(S)", val: data?.env.S.toFixed(1), icon: <Droplets className="text-yellow-400" size={18} /> },
               { label: "現在温度", val: `${data?.env.temp.toFixed(1)}°C`, icon: <Thermometer className="text-orange-400" size={18} /> },
-              { label: "放射線レベル", val: data?.env.rad.toFixed(1), icon: <Zap className="text-pink-400" size={18} /> },
-              { label: "環境pH", val: data?.env.pH.toFixed(1), icon: <FlaskConical className="text-cyan-400" size={18} /> }
+              { label: "放射線レベル", val: data?.env.rad.toFixed(1), icon: <Zap className="text-pink-400" size={18} />, onIconClick: handleNudgeRad },
+              { label: "環境pH", val: data?.env.pH.toFixed(1), icon: <FlaskConical className="text-cyan-400" size={18} />, onIconClick: handleNudgePH },
+              { label: "総個体数", val: data?.stats.total_N.toFixed(1), icon: <Activity className="text-green-400" size={18} /> },
+              { label: "アクティブ株数", val: data?.stats.active_strains, icon: <Activity className="text-blue-400" size={18} /> }
             ].map((env) => (
               <div key={env.label} className="flex flex-col items-start min-w-[60px]">
                 <div className="flex flex-column items-center gap-1 text-[9px] text-slate-500 font-bold uppercase tracking-tighter">
-                  {env.icon}
+                  {env.onIconClick ? (
+                    <button
+                      type="button"
+                      onClick={env.onIconClick}
+                      disabled={!data}
+                      title="クリックで微調整"
+                      className="rounded p-0.5 hover:bg-slate-700/70 disabled:opacity-40"
+                    >
+                      {env.icon}
+                    </button>
+                  ) : (
+                    env.icon
+                  )}
                   <span className="text-[10px]">{env.label}</span>
                 </div>
                 <div className="font-mono text-xs font-bold text-white leading-none mt-0.5">
@@ -736,97 +1250,262 @@ export default function Home() {
           </div>
 
         </header>
-            {/* 統計情報 */}
-            {/* 右側に配置するダッシュボードボタン */}
-            <div className="fixed top-6 right-6 z-50">
-              <Sheet>
-                <SheetTrigger asChild>
-                  <Button variant="outline" className="bg-slate-800 border-slate-700 text-blue-400 hover:bg-slate-700 gap-2 shadow-lg">
-                    <BarChart3 size={18} />
-                    統計・環境データ
-                  </Button>
-                </SheetTrigger>
-                
-                <SheetContent className="bg-slate-900 border-slate-800 text-white sm:max-w-md overflow-y-auto">
-                  <SheetHeader className="border-b border-slate-800 pb-4 mb-6">
-                    <SheetTitle className="text-white flex items-center gap-2">
-                      <Activity className="text-blue-400" /> 
-                      リアルタイム・アナリティクス
-                    </SheetTitle>
-                    <SheetDescription className="text-slate-400 font-mono text-xs">
-                      STEP: {data?.step.toLocaleString()}
-                    </SheetDescription>
-                  </SheetHeader>
-
-                  {data ? (
-                    <div className="space-y-8">
-                      {/* 統計情報セクション */}
-                      <section>
-                        <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">Population Stats</h3>
-                        <div className="grid grid-cols-2 gap-3">
-                          {[
-                            { label: "総個体数", val: data.stats.total_N.toFixed(1), color: "text-green-400" },
-                            { label: "アクティブ株", val: data.stats.active_strains, color: "text-blue-400" },
-                            { label: "分裂回数", val: data.stats.division_count, color: "text-purple-400" },
-                            { label: "HGT回数", val: data.stats.hgt_count, color: "text-orange-400" }
-                          ].map((stat) => (
-                            <div key={stat.label} className="bg-slate-950 p-3 rounded-lg border border-slate-800 text-center">
-                              <p className="text-[10px] text-slate-500 mb-1">{stat.label}</p>
-                              <p className={`text-xl font-mono font-bold ${stat.color}`}>{stat.val}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </section>
-                    </div>
+            {showLineagePanel ? (
+              <div className="fixed top-6 right-6 z-50 w-[420px] max-h-[88vh] overflow-hidden rounded-xl border border-slate-700 bg-slate-900/95 shadow-2xl">
+                <div className="border-b border-slate-700 px-4 py-3 flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-semibold text-white">系統図（Mermaid）</div>
+                    <div className="text-[11px] text-slate-400">ランキングの株IDを押すと、古い祖先が上になる順で表示</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowLineagePanel(false)}
+                    className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-700 hover:bg-slate-800"
+                    title="閉じる"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="p-3 h-[74vh] overflow-auto">
+                  {isLineageLoading ? (
+                    <div className="text-xs text-slate-400">系統図を取得中...</div>
+                  ) : lineageError ? (
+                    <div className="text-xs text-red-400">{lineageError}</div>
+                  ) : lineageData ? (
+                    <>
+                      <div className="text-[11px] text-slate-400 mb-2">
+                        target: #{lineageData.target_id} / depth: {lineageData.depth}
+                        {lineageData.truncated ? " (truncated)" : ""}
+                      </div>
+                      <div ref={lineageContainerRef} className="min-h-[320px] bg-slate-950/70 rounded border border-slate-700 p-2" />
+                    </>
                   ) : (
-                    <div className="text-center py-20 text-slate-600 font-mono text-sm animate-pulse">
-                      RECEIVING DATA...
+                    <div className="text-xs text-slate-500">左のランキングでIDをクリックしてください。</div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="fixed top-6 right-6 z-50">
+                <Button
+                  size="sm"
+                  onClick={() => setShowLineagePanel(true)}
+                  className="bg-slate-800 border border-slate-700 text-cyan-300 hover:bg-slate-700"
+                >
+                  系統図を表示
+                </Button>
+              </div>
+            )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 px-6">
+            <div className="lg:col-span-1">
+              <Card className="bg-slate-800/50 border-slate-700">
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant={leftPanelTab === "ranking" ? "default" : "outline"}
+                      onClick={() => setLeftPanelTab("ranking")}
+                      className={leftPanelTab === "ranking" ? "h-7 px-2 text-xs" : "h-7 px-2 text-xs border-slate-600 text-slate-300"}
+                    >
+                      ランキング
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={leftPanelTab === "env" ? "default" : "outline"}
+                      onClick={() => setLeftPanelTab("env")}
+                      className={leftPanelTab === "env" ? "h-7 px-2 text-xs" : "h-7 px-2 text-xs border-slate-600 text-slate-300"}
+                    >
+                      変更と監視
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {leftPanelTab === "ranking" ? (
+                    data && data.ranking.length > 0 ? (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="border-b border-slate-700">
+                            <tr className="text-slate-400">
+                              <th className="text-left p-2">ID</th>
+                              <th className="text-right p-2">個体数</th>
+                              <th className="text-right p-2">μ_max</th>
+                              <th className="text-right p-2">Ks</th>
+                              <th className="text-right p-2">T_opt</th>
+                              <th className="text-right p-2">pH_opt</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {data.ranking.slice(0, 10).map((strain) => (
+                              <tr key={strain.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                                <td className="p-2 font-mono text-blue-400">
+                                  <button
+                                    type="button"
+                                    onClick={() => requestLineage(strain.id)}
+                                    className={`underline underline-offset-2 hover:text-cyan-300 ${selectedLineageId === strain.id ? "text-cyan-300" : "text-blue-400"}`}
+                                  >
+                                    #{strain.id}
+                                  </button>
+                                </td>
+                                <td className="p-2 text-right font-mono text-green-400">{strain.N.toFixed(1)}</td>
+                                <td className="p-2 text-right font-mono text-purple-400">{strain.mu_max.toFixed(2)}</td>
+                                <td className="p-2 text-right font-mono text-cyan-400">{strain.Ks.toFixed(2)}</td>
+                                <td className="p-2 text-right font-mono text-orange-400">{strain.T_opt.toFixed(1)}</td>
+                                <td className="p-2 text-right font-mono text-pink-400">{strain.pH_opt.toFixed(1)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-400">ランキングデータ待機中です。</div>
+                    )
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3 space-y-2">
+                        <div className="text-xs text-slate-300 font-semibold">監視（現在値の意味）</div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="text-slate-400">基質濃度 S</div><div className="text-white font-mono text-right">{data?.env.S.toFixed(2) ?? "-"}</div>
+                          <div className="text-slate-400">毒素濃度 T</div><div className="text-white font-mono text-right">{data?.env.T.toFixed(2) ?? "-"}</div>
+                          <div className="text-slate-400">環境pH</div><div className="text-white font-mono text-right">{data?.env.pH.toFixed(2) ?? "-"}</div>
+                          <div className="text-slate-400">環境温度 temp</div><div className="text-white font-mono text-right">{data?.env.temp.toFixed(2) ?? "-"}</div>
+                          <div className="text-slate-400">放射線レベル rad</div><div className="text-white font-mono text-right">{data?.env.rad.toFixed(2) ?? "-"}</div>
+                          <div className="text-slate-400">総個体数 total_N</div><div className="text-green-300 font-mono text-right">{data?.stats.total_N.toFixed(2) ?? "-"}</div>
+                          <div className="text-slate-400">アクティブ株数 active_strains</div><div className="text-blue-300 font-mono text-right">{data?.stats.active_strains ?? "-"}</div>
+                          <div className="text-slate-400">自動供給 enabled</div><div className="text-white font-mono text-right">{data?.feed.enabled ? "ON" : "OFF"}</div>
+                          <div className="text-slate-400">供給量/バッチ per_batch</div><div className="text-white font-mono text-right">{data?.feed.per_batch?.toFixed(2) ?? "-"}</div>
+                          <div className="text-slate-400">供給上限 max_s</div><div className="text-white font-mono text-right">{data?.feed.max_s?.toFixed(2) ?? "-"}</div>
+                          <div className="text-slate-400">プラスミド種数</div><div className="text-white font-mono text-right">{data?.pool?.plasmids?.length ?? 0}</div>
+                          <div className="text-slate-400">プール濃度合計</div><div className="text-white font-mono text-right">{(data?.pool?.concentrations?.reduce((sum, value) => sum + value, 0) ?? 0).toFixed(3)}</div>
+                          <div className="text-slate-400">プール濃度最大</div><div className="text-white font-mono text-right">{(data?.pool?.concentrations?.length ? Math.max(...data.pool.concentrations) : 0).toFixed(3)}</div>
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3 space-y-2">
+                        <div className="text-xs text-slate-300 font-semibold">実行中の環境変更（入力欄→送信先）</div>
+                        <div className="grid grid-cols-1 gap-2">
+                          <div className="rounded border border-slate-700 p-2 space-y-1">
+                            <div className="text-[11px] text-slate-300">基質濃度 <span className="text-slate-500">(SET_RUNTIME_PARAMS.S)</span></div>
+                            <Input type="number" step="1" value={runtimeEnvConfig?.S ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, S: Number(e.target.value) } : prev)} placeholder="例: 500" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                          </div>
+                          <div className="rounded border border-slate-700 p-2 space-y-1">
+                            <div className="text-[11px] text-slate-300">毒素濃度 <span className="text-slate-500">(SET_RUNTIME_PARAMS.T)</span></div>
+                            <Input type="number" step="0.1" value={runtimeEnvConfig?.T ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, T: Number(e.target.value) } : prev)} placeholder="例: 0.0" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                          </div>
+                          <div className="rounded border border-slate-700 p-2 space-y-1">
+                            <div className="text-[11px] text-slate-300">環境pH <span className="text-slate-500">(SET_RUNTIME_PARAMS.pH)</span></div>
+                            <Input type="number" step="0.1" value={runtimeEnvConfig?.pH ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, pH: Number(e.target.value) } : prev)} placeholder="例: 7.0" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                          </div>
+                          <div className="rounded border border-slate-700 p-2 space-y-1">
+                            <div className="text-[11px] text-slate-300">環境温度(℃) <span className="text-slate-500">(SET_ENV.temp)</span></div>
+                            <Input type="number" step="0.1" value={runtimeEnvConfig?.temp ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, temp: Number(e.target.value) } : prev)} placeholder="例: 25.0" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                          </div>
+                          <div className="rounded border border-slate-700 p-2 space-y-1">
+                            <div className="text-[11px] text-slate-300">放射線レベル <span className="text-slate-500">(SET_ENV.rad)</span></div>
+                            <Input type="number" step="0.1" value={runtimeEnvConfig?.rad ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, rad: Number(e.target.value) } : prev)} placeholder="例: 0.0" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                          </div>
+                          <div className="rounded border border-slate-700 p-2 space-y-1">
+                            <div className="text-[11px] text-slate-300">希釈率 <span className="text-slate-500">(SET_RUNTIME_PARAMS.D)</span></div>
+                            <Input type="number" step="0.01" value={runtimeEnvConfig?.D ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, D: Number(e.target.value) } : prev)} placeholder="例: 0.01" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                          </div>
+                          <div className="rounded border border-slate-700 p-2 space-y-1">
+                            <div className="text-[11px] text-slate-300">流入基質濃度 <span className="text-slate-500">(SET_RUNTIME_PARAMS.S_in)</span></div>
+                            <Input type="number" step="1" value={runtimeEnvConfig?.S_in ?? ""} onChange={(e) => setRuntimeEnvConfig((prev) => prev ? { ...prev, S_in: Number(e.target.value) } : prev)} placeholder="例: 120" className="h-8 bg-slate-800 border-slate-700 text-xs" />
+                          </div>
+                        </div>
+                        <Button size="sm" onClick={handleApplyRuntimeEnv} disabled={!runtimeEnvConfig} className="h-7 px-2 text-xs bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 w-full">
+                          環境値を反映
+                        </Button>
+                      </div>
                     </div>
                   )}
-                </SheetContent>
-              </Sheet>
+                </CardContent>
+              </Card>
             </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 px-6">
-            {/* 株ランキング */}
-            <div className="lg:col-span-1">
-              {data && data.ranking.length > 0 && (
-                <Card className="bg-slate-800/50 border-slate-700">
-                  <CardHeader>
-                    <CardTitle className="text-white">株ランキング (Top 10)</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead className="border-b border-slate-700">
-                          <tr className="text-slate-400">
-                            <th className="text-left p-2">ID</th>
-                            <th className="text-right p-2">個体数</th>
-                            <th className="text-right p-2">μ_max</th>
-                            <th className="text-right p-2">Ks</th>
-                            <th className="text-right p-2">T_opt</th>
-                            <th className="text-right p-2">pH_opt</th>
+            <div className="lg:col-span-3 space-y-4">
+              <ColosseumChamber data={data} />
+              <Card className="bg-slate-800/50 border-slate-700">
+                <CardHeader>
+                  <CardTitle className="text-white text-sm">scatter データ</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {data?.scatter && data.scatter.x.length > 0 ? (
+                    <div className="max-h-56 overflow-auto rounded border border-slate-700">
+                      <table className="w-full text-xs font-mono">
+                        <thead className="sticky top-0 bg-slate-900 border-b border-slate-700 text-slate-400">
+                          <tr>
+                            <th className="text-left p-2">index</th>
+                            <th className="text-right p-2">x</th>
+                            <th className="text-right p-2">y</th>
+                            <th className="text-right p-2">n</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {data.ranking.slice(0, 10).map((strain) => (
-                            <tr key={strain.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                              <td className="p-2 font-mono text-blue-400">#{strain.id}</td>
-                              <td className="p-2 text-right font-mono text-green-400">{strain.N.toFixed(1)}</td>
-                              <td className="p-2 text-right font-mono text-purple-400">{strain.mu_max.toFixed(2)}</td>
-                              <td className="p-2 text-right font-mono text-cyan-400">{strain.Ks.toFixed(2)}</td>
-                              <td className="p-2 text-right font-mono text-orange-400">{strain.T_opt.toFixed(1)}</td>
-                              <td className="p-2 text-right font-mono text-pink-400">{strain.pH_opt.toFixed(1)}</td>
+                          {data.scatter.x.map((xValue, index) => (
+                            <tr key={`scatter-${index}`} className="border-b border-slate-700/50">
+                              <td className="p-2 text-slate-300">{index}</td>
+                              <td className="p-2 text-right text-cyan-300">{Number(xValue).toFixed(4)}</td>
+                              <td className="p-2 text-right text-violet-300">{Number(data.scatter?.y?.[index] ?? 0).toFixed(4)}</td>
+                              <td className="p-2 text-right text-emerald-300">{Number(data.scatter?.n?.[index] ?? 0).toFixed(2)}</td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
-                  </CardContent>
-                </Card>
-              )}
+                  ) : (
+                    <div className="text-sm text-slate-400">scatter データ待機中です。</div>
+                  )}
+                </CardContent>
+              </Card>
             </div>
-            <ColosseumChamber data={data} />
+            <div className="lg:col-span-1">
+              <Card className="bg-slate-800/50 border-slate-700 h-full">
+                <CardHeader>
+                  <div className="flex items-center justify-between gap-2">
+                    <CardTitle className="text-white text-base">AI提案コメント</CardTitle>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        onClick={handleAskAI}
+                        disabled={!data || isAiLoading}
+                        size="sm"
+                        className="h-7 px-2 text-xs bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40"
+                      >
+                        {isAiLoading ? "問い合わせ中..." : "AIに聞いてみる"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleApplyAiSuggestion}
+                        disabled={isAiLoading || aiMessages.length === 0}
+                        className="h-7 px-2 text-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40"
+                      >
+                        提案を適用
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="h-[520px] overflow-y-auto space-y-3 pr-1">
+                    {aiMessages.length === 0 ? (
+                      <div className="text-sm text-slate-400">「AIに聞いてみる」を押すと、ここに提案が表示されます。</div>
+                    ) : (
+                      aiMessages.map((msg, idx) => (
+                        <div
+                          key={`${msg.at}-${idx}`}
+                          className={`rounded-lg border px-3 py-2 text-sm whitespace-pre-wrap ${
+                            msg.role === "user"
+                              ? "border-blue-500/40 bg-blue-500/10 text-blue-200"
+                              : msg.role === "assistant"
+                                ? "border-violet-500/40 bg-violet-500/10 text-violet-100"
+                                : "border-amber-500/40 bg-amber-500/10 text-amber-100"
+                          }`}
+                        >
+                          <div className="text-[10px] opacity-70 mb-1">{msg.role.toUpperCase()} • {msg.at}</div>
+                          <div>{msg.text}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </div>
 
             {/* データ待機 */}
