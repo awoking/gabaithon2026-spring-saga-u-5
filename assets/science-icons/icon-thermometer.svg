@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 130 140" width="130" height="140">
+  <defs>
+    <linearGradient id="mercuryGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f87171"/><stop offset="100%" stop-color="#ef4444"/>
+    </linearGradient>
+    <radialGradient id="bulbGrad" cx="40%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#fca5a5"/><stop offset="100%" stop-color="#dc2626"/>
+    </radialGradient>
+    <filter id="glow1"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="glow2"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect x="57" y="18" width="16" height="68" rx="8" fill="#1e1b2e" stroke="#f87171" stroke-width="1.5" stroke-opacity="0.8"/>
+  <rect x="61" y="42" width="8" height="44" rx="4" fill="url(#mercuryGrad)" filter="url(#glow1)"/>
+  <line x1="73" y1="28" x2="80" y2="28" stroke="#f87171" stroke-width="1.2" stroke-opacity="0.7"/>
+  <line x1="73" y1="40" x2="80" y2="40" stroke="#f87171" stroke-width="1.2" stroke-opacity="0.7"/>
+  <line x1="73" y1="52" x2="80" y2="52" stroke="#f87171" stroke-width="1.2" stroke-opacity="0.7"/>
+  <line x1="73" y1="64" x2="80" y2="64" stroke="#f87171" stroke-width="1.2" stroke-opacity="0.7"/>
+  <text x="82" y="32" font-family="'Courier New',monospace" font-size="8" fill="#f87171" opacity="0.8">25</text>
+  <text x="82" y="44" font-family="'Courier New',monospace" font-size="8" fill="#f87171" opacity="0.8">20</text>
+  <text x="82" y="56" font-family="'Courier New',monospace" font-size="8" fill="#f87171" opacity="0.8">15</text>
+  <text x="82" y="68" font-family="'Courier New',monospace" font-size="8" fill="#f87171" opacity="0.8">10</text>
+  <circle cx="65" cy="96" r="12" fill="url(#bulbGrad)" stroke="#f87171" stroke-width="1.5" filter="url(#glow2)"/>
+  <circle cx="60" cy="91" r="3" fill="white" fill-opacity="0.25"/>
+</svg>
