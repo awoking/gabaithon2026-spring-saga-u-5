@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+numpy
+numba
+psycopg[binary]
+pgvector

@@ -7,6 +7,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from engine import SimulationEngine
 from manager import SimulationManager
+from ai_support import ai_vector_store
 import numpy as np
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
@@ -119,6 +120,18 @@ def apply_runtime_params(params: Dict[str, Any]):
         manager.division_threshold = max(1.0, _to_float(params.get("division_threshold"), manager.division_threshold))
 
 
+def build_current_snapshot() -> Dict[str, Any]:
+    snapshot = manager.get_snapshot()
+    snapshot["control"] = {
+        "D": float(manager.env_params[8]),
+        "S_in": float(manager.env_params[9]),
+        "batch_size": int(manager.batch_size),
+        "k_hgt": float(manager.k_hgt),
+        "division_threshold": float(manager.division_threshold),
+    }
+    return snapshot
+
+
 async def handle_start_message(msg: Dict[str, Any]):
     logger.info("START received - initializing with custom settings")
     initialize_simulation()
@@ -220,6 +233,41 @@ async def handle_control_message(msg: Dict[str, Any], websocket: WebSocket):
             "type": "LINEAGE_DATA",
             "ok": True,
             "lineage": lineage,
+        })
+        return
+
+    if msg_type == "AI_INGEST_CASE":
+        before_snapshot = msg.get("before_snapshot")
+        after_snapshot = msg.get("after_snapshot")
+        action = msg.get("action")
+
+        if not isinstance(before_snapshot, dict) or not isinstance(after_snapshot, dict):
+            await send_to_websocket(websocket, {
+                "type": "AI_INGEST_ACK",
+                "ok": False,
+                "error": "before_snapshot and after_snapshot are required",
+            })
+            return
+
+        result = ai_vector_store.ingest_case(before_snapshot, after_snapshot, action)
+        await send_to_websocket(websocket, {
+            "type": "AI_INGEST_ACK",
+            **result,
+        })
+        return
+
+    if msg_type == "AI_SUPPORT_REQUEST":
+        current_snapshot = msg.get("current_snapshot")
+        if not isinstance(current_snapshot, dict):
+            current_snapshot = build_current_snapshot()
+
+        result = ai_vector_store.retrieve_similar(
+            current_snapshot=current_snapshot,
+            top_k=max(1, _to_int(msg.get("top_k"), 8)),
+        )
+        await send_to_websocket(websocket, {
+            "type": "AI_SUPPORT_RESULT",
+            **result,
         })
         return
 
