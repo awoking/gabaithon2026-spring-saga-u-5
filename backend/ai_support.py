@@ -5,6 +5,15 @@ from urllib.parse import urlparse
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import httpx
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+except Exception:
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv(Path(__file__).with_name(".env"), override=False)
 
 try:
     import psycopg

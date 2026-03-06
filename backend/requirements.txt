@@ -6,3 +6,4 @@ psycopg[binary]
 psycopg-pool
 pgvector
 httpx
+python-dotenv
