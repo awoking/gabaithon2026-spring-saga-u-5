@@ -68,7 +68,7 @@ pip install numpy numba fastapi uvicorn websockets
 cd backend
 python main.py
 ```
-→ WebSocketサーバーが `ws://localhost:8765` で起動
+→ WebSocketサーバーが `ws://localhost:8000/ws` で起動
 
 #### ターミナル2: フロントエンド起動
 ```bash
@@ -80,6 +80,36 @@ pnpm dev
 yarn dev
 ```
 → Webアプリが `http://localhost:3000` で起動
+
+## Docker Compose デプロイ
+
+### 1. 前提
+- `backend/.env` に必要な環境変数（Supabase / Azure OpenAI）を設定
+- Docker Desktop (または Docker Engine + Compose) が起動済み
+
+### 2. 起動
+```bash
+docker compose up --build -d
+```
+
+### 3. アクセス先
+- フロントエンド: `http://localhost:3000`
+- バックエンド: `http://localhost:8000`
+- WebSocket: `ws://localhost:8000/ws`
+
+### 4. 停止
+```bash
+docker compose down
+```
+
+### 5. WebSocket先の変更（必要時）
+`NEXT_PUBLIC_WS_URL` を指定すると、フロントエンドの接続先を上書きできます。
+
+PowerShell 例:
+```powershell
+$env:NEXT_PUBLIC_WS_URL="ws://your-host:8000/ws"
+docker compose up --build -d
+```
 
 ## テスト
 
